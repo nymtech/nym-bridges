@@ -79,8 +79,7 @@ jobs:
 
   build:
     name: Build
-    needs: format
-    # needs: [format, lint]
+    needs: [format, lint]
     strategy:
       fail-fast: true
       matrix:
