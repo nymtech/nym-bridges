@@ -1,13 +1,11 @@
-
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::*;
 
 use rand::Rng;
 use tokio::net::UdpSocket;
 use tokio::time::sleep;
-
 
 #[allow(unused)]
 pub async fn send_packets(

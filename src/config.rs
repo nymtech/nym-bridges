@@ -130,7 +130,11 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
         let ips: Vec<IpAddr> = value
             .public_ips
             .iter()
-            .map(|ip_str| ip_str.parse().expect("failed to parse public IP '{ip_str}' as IpAddr"))
+            .map(|ip_str| {
+                ip_str
+                    .parse()
+                    .expect("failed to parse public IP '{ip_str}' as IpAddr")
+            })
             .collect();
 
         let mut transports = vec![];

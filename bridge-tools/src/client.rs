@@ -1,7 +1,8 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Instant, io::Read};
+use std::{io::Read, net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     signal,
@@ -9,7 +10,6 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use tracing::{error, info};
-use serde::{Serialize, Deserialize};
 
 use nym_bridges::config::{ClientConfig, PersistedClientConfig};
 use nym_bridges::connection::copy_bidirectional;
@@ -26,8 +26,6 @@ struct Args {
     /// Path to the configuration for establishing transport connections
     config_path: PathBuf,
 }
-
-
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub struct ServiceConfig {
