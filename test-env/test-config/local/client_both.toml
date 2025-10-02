@@ -1,0 +1,27 @@
+
+
+[[transports]]
+
+[transports.init_delay]
+secs = 2
+nanos = 0
+
+[transports.transport]
+transport_type = "quic_plain"
+
+[transports.transport.args]
+address = "[::1]:443"
+id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="
+
+
+
+
+[[transports]]
+
+[transports.transport]
+transport_type = "tls_plain"
+
+[transports.transport.args]
+address = "[::1]:443"
+host = "alt.domain.com"
+id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="

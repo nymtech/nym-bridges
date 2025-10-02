@@ -1,0 +1,21 @@
+[package]
+name = "bridge-cfg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+anyhow = "1.0.22"
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = { version = "2.2", features = ["pkcs8", "alloc", "pem", "rand_core"]}
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+similar = "2.7"
+tracing = { version = "0.1.10", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.0", default-features = false, features = ["env-filter", "fmt", "ansi", "time", "local-time"] }
+toml = "0.9"
+toml_edit = "0.23.3"
+
+nym-bridges = {path = "../"}
+nym-config = { git = "https://github.com/nymtech/nym.git" }

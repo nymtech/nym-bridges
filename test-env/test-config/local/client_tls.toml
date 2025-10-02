@@ -1,0 +1,13 @@
+
+
+ingress_addr = "[::1]:8081"
+
+[[transports]]
+
+[transports.transport]
+transport_type = "tls_plain"
+
+[transports.transport.args]
+address = "[::1]:4443"
+host = "tls-test.domain.com"
+id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="

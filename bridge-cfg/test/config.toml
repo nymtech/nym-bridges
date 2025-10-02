@@ -1,0 +1,309 @@
+
+##### main base nym-node config options #####
+
+# Human-readable ID of this particular node.
+id = 'default-nym-node'
+
+# Current modes of this nym-node.
+
+[modes]
+# Specifies whether this node can operate in a mixnode mode.
+mixnode = false
+
+# Specifies whether this node can operate in an entry mode.
+entry = true
+
+# Specifies whether this node can operate in an exit mode.
+exit = true
+
+[host]
+# Ip address(es) of this host, such as 1.1.1.1 that external clients will use for connections.
+# If no values are provided, when this node gets included in the network, 
+# its ip addresses will be populated by whatever value is resolved by associated nym-api.
+public_ips = [
+'1.1.1.1',
+'2a01::1',
+]
+
+# (temporary) Optional hostname of this node, for example nymtech.net.
+hostname = 'random.nym-node.example.com'
+
+# Optional ISO 3166 alpha-2 two-letter country code of the node's **physical** location
+location = ''
+
+[mixnet]
+# Address this node will bind to for listening for mixnet packets
+# default: `[::]:1789`
+bind_address = '[::]:1789'
+
+# If applicable, custom port announced in the self-described API that other clients and nodes
+# will use.
+# Useful when the node is behind a proxy.
+# (default: 0 - disabled)
+announce_port = 0 
+
+# Addresses to nym APIs from which the node gets the view of the network.
+nym_api_urls = [
+'https://validator.nymtech.net/api/',
+]
+
+# Addresses to nyxd which the node uses to interact with the nyx chain.
+nyxd_urls = [
+    'https://rpc.nymtech.net/',
+]
+
+[mixnet.replay_protection]
+
+[mixnet.replay_protection.storage_paths]
+# Path to the directory storing currently used bloomfilter(s).
+current_bloomfilters_directory = '/home/nym/.nym/nym-nodes/default-nym-node/data/replay-detection'
+
+# Storage paths to persistent nym-node data, such as its long term keys.
+[storage_paths]
+
+# Path to a file containing basic node description: human-readable name, website, details, etc.
+description = '/home/nym/.nym/nym-nodes/default-nym-node/data/description.toml' 
+
+[storage_paths.keys]
+# Path to file containing ed25519 identity private key.
+private_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_identity'
+
+# Path to file containing ed25519 identity public key.
+public_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_identity.pub'
+
+# Path to file containing the primary x25519 sphinx private key.
+primary_x25519_sphinx_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_sphinx_primary'
+
+# Path to file containing the secondary x25519 sphinx private key.
+secondary_x25519_sphinx_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_sphinx_secondary'
+
+# Path to file containing x25519 noise private key.
+private_x25519_noise_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_noise'
+
+# Path to file containing x25519 noise public key.
+public_x25519_noise_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_noise.pub'
+
+
+##### http-API nym-node config options #####
+
+[http]
+# Socket address this node will use for binding its http API.
+# default: `[::]:8080`
+bind_address = '[::]:8080'
+
+# Path to assets directory of custom landing page of this node
+landing_page_assets_path = '/var/www/'
+
+# An optional bearer token for accessing certain http endpoints.
+# Currently only used for obtaining mixnode's stats.
+access_token = ''
+
+# Specify whether basic system information should be exposed.
+# default: true
+expose_system_info = true
+
+# Specify whether basic system hardware information should be exposed.
+# This option is superseded by `expose_system_info`
+# default: true
+expose_system_hardware = true
+
+# Specify whether detailed system crypto hardware information should be exposed.
+# This option is superseded by `expose_system_hardware`
+# default: true
+expose_crypto_hardware = true
+
+##### wireguard-API nym-node config options #####
+
+[wireguard]
+# Specifies whether the wireguard service is enabled on this node.
+enabled = true
+
+# Socket address this node will use for binding its wireguard interface.
+# default: `[::]:51822`
+bind_address = '0.0.0.0:51822'
+
+# Private IP address of the wireguard gateway.
+# default: `10.1.0.1`
+private_ipv4 = '10.1.0.1'
+
+# Private IP address of the wireguard gateway.
+# default: `fc01::1`
+private_ipv6 = 'fc01::1'
+
+# Port announced to external clients wishing to connect to the wireguard interface.
+# Useful in the instances where the node is behind a proxy.
+announced_port = 51822
+
+# The prefix denoting the maximum number of the clients that can be connected via Wireguard using IPv4.
+# The maximum value for IPv4 is 32
+private_network_prefix_v4 = 16
+
+# The prefix denoting the maximum number of the clients that can be connected via Wireguard using IPv6.
+# The maximum value for IPv6 is 128
+private_network_prefix_v6 = 112
+
+[wireguard.storage_paths]
+# Path to file containing wireguard x25519 diffie hellman private key.
+private_diffie_hellman_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_wg_dh'
+
+# Path to file containing wireguard x25519 diffie hellman public key.
+public_diffie_hellman_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_wg_dh.pub'
+
+
+##### verloc config options #####
+
+[verloc]
+# Socket address this node will use for binding its verloc API.
+# default: `[::]:1790`
+bind_address = '[::]:1790'
+
+# If applicable, custom port announced in the self-described API that other clients and nodes
+# will use.
+# Useful when the node is behind a proxy.
+# (default: 0 - disabled)
+announce_port = 0 
+
+
+##### gateway tasks config options #####
+
+[gateway_tasks]
+# Indicates whether this gateway is accepting only coconut credentials for accessing the mixnet
+# or if it also accepts non-paying clients
+enforce_zk_nyms = false
+
+# Socket address this node will use for binding its client websocket API.
+# default: `[::]:9000`
+ws_bind_address = '[::]:9000'
+
+# Custom announced port for listening for websocket client traffic.
+# If unspecified, the value from the `bind_address` will be used instead
+# (default: 0 - unspecified)
+announce_ws_port =  0 
+
+# If applicable, announced port for listening for secure websocket client traffic.
+# (default: 0 - disabled)
+announce_wss_port = 0
+
+
+[gateway_tasks.storage_paths]
+# Path to sqlite database containing all persistent data: messages for offline clients,
+# derived shared keys, available client bandwidths and wireguard peers.
+clients_storage = '/home/nym/.nym/nym-nodes/default-nym-node/data/clients.sqlite'
+
+# Path to sqlite database containing all persistent stats data.
+stats_storage = '/home/nym/.nym/nym-nodes/default-nym-node/data/stats.sqlite'
+
+# Path to file containing cosmos account mnemonic used for zk-nym redemption.
+cosmos_mnemonic = '/home/nym/.nym/nym-nodes/default-nym-node/data/cosmos_mnemonic'
+
+# Path to file containing client params for nym bridges
+bridge_client_params = '/home/nym/.nym/nym-nodes/default-nym-node/config/client_bridge_params.json'
+
+##### service providers nym-node config options #####
+
+[service_providers]
+
+# specifies whether this exit node should run in 'open-proxy' mode
+# and thus would attempt to resolve **ANY** request it receives.
+open_proxy = false
+
+# Specifies the custom url for an upstream source of the exit policy used by this node.
+upstream_exit_policy_url = 'https://nymtech.net/.wellknown/network-requester/exit-policy.txt'
+
+[service_providers.network_requester]
+# currently empty (there are some debug options one might want to configure)
+
+[service_providers.ip_packet_router]
+# currently empty (there are some debug options one might want to configure)
+
+[service_providers.authenticator]
+# currently empty (there are some debug options one might want to configure)
+
+[service_providers.storage_paths]
+
+# Path to sqlite database containing all persistent data: messages for offline clients,
+# derived shared keys, available client bandwidths and wireguard peers.
+clients_storage = '/home/nym/.nym/nym-nodes/default-nym-node/data/clients.sqlite'
+
+# Path to sqlite database containing all persistent stats data.
+stats_storage = '/home/nym/.nym/nym-nodes/default-nym-node/data/stats.sqlite'
+
+[service_providers.storage_paths.network_requester]
+# Path to file containing network requester ed25519 identity private key.
+private_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_nr_identity'
+
+# Path to file containing network requester ed25519 identity public key.
+public_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_nr_identity.pub'
+
+# Path to file containing network requester x25519 diffie hellman private key.
+private_x25519_diffie_hellman_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_nr_dh'
+
+# Path to file containing network requester x25519 diffie hellman public key.
+public_x25519_diffie_hellman_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_nr_dh.pub'
+
+# Path to file containing key used for encrypting and decrypting the content of an
+# acknowledgement so that nobody besides the client knows which packet it refers to.
+ack_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/aes128ctr_nr_ack'
+
+# Path to the persistent store for received reply surbs, unused encryption keys and used sender tags.
+reply_surb_database = '/home/nym/.nym/nym-nodes/default-nym-node/data/nr_persistent_reply_store.sqlite'
+
+# Normally this is a path to the file containing information about gateways used by this client,
+# i.e. details such as their public keys, owner addresses or the network information.
+# but in this case it just has the basic information of "we're using custom gateway".
+# Due to how clients are started up, this file has to exist.
+gateway_registrations = '/home/nym/.nym/nym-nodes/default-nym-node/data/nr_gateways_info_store.sqlite'
+
+[service_providers.storage_paths.ip_packet_router]
+# Path to file containing ip packet router ed25519 identity private key.
+private_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_ipr_identity'
+
+# Path to file containing ip packet router ed25519 identity public key.
+public_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_ipr_identity.pub'
+
+# Path to file containing ip packet router x25519 diffie hellman private key.
+private_x25519_diffie_hellman_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_ipr_dh'
+
+# Path to file containing ip packet router x25519 diffie hellman public key.
+public_x25519_diffie_hellman_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_ipr_dh.pub'
+
+# Path to file containing key used for encrypting and decrypting the content of an
+# acknowledgement so that nobody besides the client knows which packet it refers to.
+ack_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/aes128ctr_ipr_ack'
+
+# Path to the persistent store for received reply surbs, unused encryption keys and used sender tags.
+reply_surb_database = '/home/nym/.nym/nym-nodes/default-nym-node/data/ipr_persistent_reply_store.sqlite'
+
+# Normally this is a path to the file containing information about gateways used by this client,
+# i.e. details such as their public keys, owner addresses or the network information.
+# but in this case it just has the basic information of "we're using custom gateway".
+# Due to how clients are started up, this file has to exist.
+gateway_registrations = '/home/nym/.nym/nym-nodes/default-nym-node/data/ipr_gateways_info_store.sqlite'
+
+[service_providers.storage_paths.authenticator]
+# Path to file containing authenticator ed25519 identity private key.
+private_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_auth_identity'
+
+# Path to file containing authenticator ed25519 identity public key.
+public_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_auth_identity.pub'
+
+# Path to file containing authenticator x25519 diffie hellman private key.
+private_x25519_diffie_hellman_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_auth_dh'
+
+# Path to file containing authenticator x25519 diffie hellman public key.
+public_x25519_diffie_hellman_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/x25519_auth_dh.pub'
+
+# Path to file containing key used for encrypting and decrypting the content of an
+# acknowledgement so that nobody besides the client knows which packet it refers to.
+ack_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/aes128ctr_auth_ack'
+
+# Path to the persistent store for received reply surbs, unused encryption keys and used sender tags.
+reply_surb_database = '/home/nym/.nym/nym-nodes/default-nym-node/data/auth_persistent_reply_store.sqlite'
+
+# Normally this is a path to the file containing information about gateways used by this client,
+# i.e. details such as their public keys, owner addresses or the network information.
+# but in this case it just has the basic information of "we're using custom gateway".
+# Due to how clients are started up, this file has to exist.
+gateway_registrations = '/home/nym/.nym/nym-nodes/default-nym-node/data/auth_gateways_info_store.sqlite'
+
+

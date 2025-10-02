@@ -1,0 +1,25 @@
+
+
+[Unit]
+Description=nym-bridge daemon
+
+# Make sure the network is online before this starts
+After=NetworkManager.service systemd-resolved.service nym-node.service
+
+# Set a limit to the rate / number of restarts to prevent fail busy loop
+# in case of misconfiguration or something
+StartLimitBurst=5
+StartLimitIntervalSec=30
+
+[Service]
+# User=<USER>
+# Group=<USER>
+# Type=simple
+LimitNOFILE=65536
+ExecStart=/usr/local/bin/nym-bridge
+
+Restart=on-abnormal
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

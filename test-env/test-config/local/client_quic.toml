@@ -1,0 +1,12 @@
+
+ingress_addr = "[::1]:8080"
+
+[[transports]]
+
+[transports.transport]
+transport_type = "quic_plain"
+
+[transports.transport.args]
+address = "[::1]:4443"
+id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="
+host = "quic-test.domain.com"

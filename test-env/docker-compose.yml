@@ -1,0 +1,36 @@
+
+services:
+  wg0:
+    build:
+      context: ../
+      target: wg0
+    container_name: wg0
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: 1
+    networks:
+      wgnet:
+        ipv4_address: 192.168.100.2
+
+  wg1:
+    build:
+      context: ../
+      target: wg1
+    container_name: wg1
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: 1
+    networks:
+      wgnet:
+        ipv4_address: 192.168.100.3
+
+networks:
+  wgnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24

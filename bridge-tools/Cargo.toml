@@ -1,0 +1,64 @@
+[package]
+name = "bridge-tools"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "client"
+path = "src/client.rs"
+
+[[bin]]
+name = "client-udp"
+path = "src/client_udp.rs"
+
+[[bin]]
+name = "udp-echo"
+path = "src/udp_echo.rs"
+
+[[bin]]
+name = "udp-recv"
+path = "src/udp_recv.rs"
+
+[[bin]]
+name = "udp-sender"
+path = "src/udp_sender.rs"
+
+[dependencies]
+anyhow = "1.0.22"
+base64 = "0.22.1"
+bs58 = "0.5.1"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = { version = "3.0.0-pre.0", features = ["pkcs8", "alloc", "pem", "rand_core"]}
+getrandom = { version = "0.3", default-features = false }
+hex = "0.4.3"
+lru-slab = "0.1.2"
+lazy_static = "1"
+log = "0.4"
+once_cell = "1.19"
+pin-project-lite = "0.2"
+quinn-proto = "0.11"
+quinn = "0.11"
+rand = "0.9"
+rcgen = "0.14"
+ring = "0.17"
+rustc-hash = "2"
+rustls = { version = "0.23.5", default-features = false, features = ["std", "ring", "logging"] }
+rustls-pki-types = "1.7"
+serde = { version = "1.0", features = ["derive"] }
+slab = "0.4.6"
+socket2 = ">=0.5, <0.7"
+thiserror = "2.0.3"
+tinyvec = { version = "1.1", features = ["alloc"] }
+tokio = {version = "1.45", features=["full"]}
+tokio-rustls = { version ="0.26", features = ["ring", "tls12", "logging"], default-features=false}
+tokio-util = {version="0.7.15", features=["full"]}
+toml = "0.9"
+tracing = { version = "0.1.10", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.0", default-features = false, features = ["env-filter", "fmt", "ansi", "time", "local-time"] }
+uuid = "1.17"
+x509-parser = { version = "0.17.0", features = ["verify"] }
+webpki-roots = "0.26"
+rand_chacha = "0.9"
+
+nym-bridges= {path= "../"}

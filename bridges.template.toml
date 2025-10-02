@@ -1,0 +1,59 @@
+# Nym Bridge Gateway Runner Configuration
+#
+# [version 0] - this is an initial implementation and the configuration handling will likely change
+# going forward.
+
+# Path to file containing client parameters associated with the transports defined in this file
+client_params_path = "/etc/nym/default-nym-node/client_bridge_params.json"
+
+# Set of public IPs that address the listening host (usually and Ipv4 and IPv6 pair)
+public_ips = ["192.168.0.1", "fe80::1"]
+
+[forward]
+# Target address where client traffic will be forwarded.
+#
+# If running in parallel with `nym-node` this should match with your public IP and announced wireguard port.
+address = "[::1]:51822"
+
+[[transports]]
+transport_type = "quic_plain"
+
+[transports.args]
+# Enable stateless retries
+stateless_retry = false
+
+# (UDP) Socket address to listen on
+listen = "[::]:4443"
+
+# Client address to block for sending, be default this is set by the OS on connection handling.
+# block = "[2a01::1234]:5000" 
+
+# Maximum number of concurrent connections to allow
+# connection_limit = 0
+
+# Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based
+# self signed certs
+private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity.pem'
+
+# Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
+# certificates. Used only if `private_ed25519_identity_key_file` is not provided.
+# identity_key = "<base64 encoded identity private key>"
+
+
+[[transports]]
+transport_type = "tls_plain"
+
+[transports.args]
+# (TCP) Socket address to listen on
+listen = "[::]:4443"
+
+# Maximum number of concurrent connections to allow
+# connection_limit = 0
+
+# Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based
+# self signed certs
+private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity.pem'
+
+# Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
+# certificates. Used only if `private_ed25519_identity_key_file` is not provided.
+# identity_key = "<base64 encoded identity private key>"
