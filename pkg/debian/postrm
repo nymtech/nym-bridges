@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+BRIDGES_CONF="/etc/nym/bridges.toml"
+
+case "$1" in
+purge)
+    # Per https://www.debian.org/doc/debian-policy/ch-files.html#behavior
+    # "configuration files must be preserved when the package is removed, and
+    #  only deleted when the package is purged."
+    if [ -f ${BRIDGES_CONF} ]; then
+        rm ${BRIDGES_CONF}
+    fi
+    ;;
+esac
+
+#DEBHELPER#

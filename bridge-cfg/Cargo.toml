@@ -19,3 +19,7 @@ toml_edit = "0.23.3"
 
 nym-bridges = {path = "../"}
 nym-config = { git = "https://github.com/nymtech/nym.git" }
+
+
+[dev-dependencies]
+tempdir = "0.3"

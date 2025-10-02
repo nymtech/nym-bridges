@@ -1,0 +1,45 @@
+[Unit]
+Description=nym-bridge daemon
+Documentation=man:krill(1)
+
+# Make sure the network is online before this starts
+After=NetworkManager.service systemd-resolved.service
+
+[Service]
+ExecStart=/usr/bin/nym-bridge --config /etc/nym/bridges.toml
+Type=exec
+Restart=on-abnormal
+RestartSec=5
+User=nym
+Group=nym
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# system execution protections / limitations
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+
+# executable access limitations
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/nym/
+RestrictRealtime=yes
+StateDirectory=nym
+SystemCallArchitectures=native
+SystemCallErrorNumber=EPERM
+SystemCallFilter=@system-service
+
+# Set a limit to the rate / number of restarts to prevent fail busy loop
+# in case of misconfiguration or something
+StartLimitBurst=5
+StartLimitIntervalSec=30
+
+[Install]
+WantedBy=multi-user.target

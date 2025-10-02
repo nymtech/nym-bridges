@@ -6,7 +6,7 @@
 //!
 //! [Original Config](https://github.com/nymtech/nym/blob/develop/nym-node/src/config/mod.rs)
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use toml_edit::DocumentMut;
 
 use std::{
@@ -64,6 +64,14 @@ impl NodeConfig {
     pub fn set_bridge_client_config_path(&mut self, path: &Path) {
         self.inner["gateway_tasks"]["storage_paths"]["bridge_client_params"] =
             toml_edit::value(path.to_str().unwrap());
+    }
+
+    pub fn get_bridge_client_config_path(&self) -> Result<PathBuf> {
+        self.inner["gateway_tasks"]["storage_paths"]["bridge_client_params"]
+            .as_str()
+            .ok_or(anyhow!("missing bridge client params entry"))?
+            .parse()
+            .context("")
     }
 
     pub fn serialize(&self) -> String {

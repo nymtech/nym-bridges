@@ -1,0 +1,9 @@
+The nym-bridge is an open source system for establishing pluggable transport
+connections to be used for wrapping and obfuscating VPN traffic. This is
+meant to be deployed alongside the nym-node gateway in the entry capacity.
+
+The larger Nym system provides a secure distributed multi-hop VPN and mixnet.
+
+This package contains the nym-bridge daemon and bridge-cfg CLI binaries.
+
+For more information visit https://nym.com/docs/operators/.

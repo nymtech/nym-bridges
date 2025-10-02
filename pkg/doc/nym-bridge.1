@@ -1,0 +1,35 @@
+.TH "nym-bridge" "1" "Nym Technologies SA."
+.SH NAME
+nym-bridge - Nym bridges server daemon
+.SH SYNOPSIS
+nym-bridge -c, --config <FILE>
+
+nym-bridge -h, --help
+
+.SH DESCRIPTION
+The nym-bridge is an open source system for establishing pluggable transport
+connections to be used for wrapping and obfuscating VPN traffic. This is
+meant to be deployed alongside the nym-node gateway in the entry capacity.
+
+The Nym system provides a secure distributed multi-hop VPN and mixnet.
+
+This manual page documents the nym bridges daemon.
+
+.SH OPTIONS
+The available options are:
+
+.TP
+.BI -c,\ --config\ <FILE>
+Specify the path to the config file to load. If no file path is provided,
+a default path will be assumed.
+
+.TP
+.BI -h,\ --help
+Prints help information.
+
+.SH CONFIGURATION FILE
+A sample configuration file showing the default values used by nym bridges
+can be found at:
+  /usr/share/doc/nym/bridges.template.toml
+.SH SEE ALSO
+https://nym.com/docs/operators/
