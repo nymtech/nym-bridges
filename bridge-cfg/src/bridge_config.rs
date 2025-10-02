@@ -6,7 +6,7 @@ use toml_edit::{DocumentMut, Item, value};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::bridge_client_config::BridgeClientConfig;
 
@@ -71,7 +71,7 @@ impl BridgeConfig {
     /// will only be using one of the transports initially anyways. TODO: This should be updated in
     /// the next version to allow the transport types to generate their own initial state / key
     /// material rather than trying to do it for them.
-    pub fn generate_keys(&mut self, overwrite: bool, dir: &PathBuf) -> Result<()> {
+    pub fn generate_keys(&mut self, overwrite: bool, dir: &Path) -> Result<()> {
         let mut rng = rand::rngs::OsRng;
         let new_key = SigningKey::generate(&mut rng);
         let key = new_key
@@ -79,7 +79,7 @@ impl BridgeConfig {
             .context("failed to serialize ed25519 private key to PKCS8 PEM")?
             .as_bytes()
             .to_vec();
-        let path = dir.clone().join("ed25519_identity.pem");
+        let path = dir.join("ed25519_identity.pem");
         let keyfile = Keyfile {
             path: path.clone(),
             key,
