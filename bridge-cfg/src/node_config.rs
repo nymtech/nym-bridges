@@ -13,7 +13,7 @@ use std::{
     fs::File,
     io::{Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::{PathBuf, Path},
+    path::{Path, PathBuf},
 };
 
 #[derive(Debug, Clone)]

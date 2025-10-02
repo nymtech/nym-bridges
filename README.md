@@ -7,6 +7,11 @@
 
 # Nym Transport Bridges
 
+<p>
+  <a href="https://github.com/nymtech/nym-bridges/actions/workflows/rust.yml">
+    <img src="https://github.com/nymtech/nym-bridges/actions/workflows/rust.yml/badge.svg?branch=main" alt="Build Status"></a>
+</p>
+
 This repository implements and provides tooling for a pluggable transport system used to secure and
 obfuscate [Nym VPN](https://github.com/nymtech/nym-vpn-client/) traffic. The
 [nym-bridge](./nym-bridge/) is a server-side transparent forwarder accepting and unwrapping

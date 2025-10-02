@@ -227,7 +227,6 @@ fn main() -> Result<()> {
 //         let out_str = toml::to_string(&bridge_config).unwrap();
 //         let bridge_config = out_str.parse::<DocumentMut>().unwrap();
 
-
 //         let run_args = ConfigArgs {
 //             generate_keys:false,
 //             node_config_dir: None,

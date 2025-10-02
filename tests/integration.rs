@@ -1,9 +1,9 @@
-use tokio::io::{ReadBuf, AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::UdpSocket;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::filter::LevelFilter;
 use tracing::*;
+use tracing_subscriber::filter::LevelFilter;
 
 use std::env;
 use std::pin::Pin;
@@ -77,15 +77,15 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for LoggingIo<T> {
     ) -> Poll<Result<usize, tokio::io::Error>> {
         let result = Pin::new(&mut self.inner).poll_write(cx, buf);
 
-        if let Poll::Ready(Ok(bytes_written)) = &result {
-            if *bytes_written > 0 {
-                trace!(
-                    "{}: Wrote {} bytes {}",
-                    self.name,
-                    bytes_written,
-                    hex::encode(buf)
-                );
-            }
+        if let Poll::Ready(Ok(bytes_written)) = &result
+            && *bytes_written > 0
+        {
+            trace!(
+                "{}: Wrote {} bytes {}",
+                self.name,
+                bytes_written,
+                hex::encode(buf)
+            );
         }
 
         result

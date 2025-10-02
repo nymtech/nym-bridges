@@ -3,8 +3,8 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use base64::prelude::*;
-use ed25519_dalek::{VerifyingKey, SigningKey};
 use ed25519_dalek::pkcs8::DecodePrivateKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use quinn_proto::crypto::rustls::QuicClientConfig;
 use quinn_proto::crypto::rustls::QuicServerConfig;
 use serde::{Deserialize, Serialize};
@@ -57,7 +57,7 @@ impl ServerConfig {
                 .map_err(|e| anyhow!("failed to parse identity key in {key_path:?}: {e}"))?;
             Ok(ServerConfigSource::from_identity(signing_key.to_bytes()))
         } else {
-            return Err(anyhow!("no crypto source provided"));
+            Err(anyhow!("no crypto source provided"))
         }
     }
 

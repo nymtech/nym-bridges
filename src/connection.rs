@@ -275,15 +275,15 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for LoggingIo<T> {
     ) -> Poll<Result<usize, tokio::io::Error>> {
         let result = Pin::new(&mut self.inner).poll_write(cx, buf);
 
-        if let Poll::Ready(Ok(bytes_written)) = &result {
-            if *bytes_written > 0 {
-                trace!(
-                    "{}: Wrote {} bytes {}",
-                    self.name,
-                    bytes_written,
-                    hex::encode(buf)
-                );
-            }
+        if let Poll::Ready(Ok(bytes_written)) = &result
+            && *bytes_written > 0
+        {
+            trace!(
+                "{}: Wrote {} bytes {}",
+                self.name,
+                bytes_written,
+                hex::encode(buf)
+            );
         }
 
         result
