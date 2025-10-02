@@ -56,7 +56,7 @@ impl ServerConfig {
                 .map_err(|e| anyhow!("failed to parse identity key in {key_path:?}: {e}"))?;
             Ok(ServerConfigSource::from_identity(signing_key.to_bytes()))
         } else {
-            return Err(anyhow!("no crypto source provided"));
+            Err(anyhow!("no crypto source provided"))
         }
     }
 

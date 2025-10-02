@@ -189,10 +189,10 @@ impl Generator {
     }
 
     async fn next_packet(&mut self) -> Option<Vec<u8>> {
-        if let Count::N(max_count) = self.count {
-            if self.n_sent >= max_count {
-                return None;
-            }
+        if let Count::N(max_count) = self.count
+            && self.n_sent >= max_count
+        {
+            return None;
         }
         self.apply_rate_limit().await;
 
