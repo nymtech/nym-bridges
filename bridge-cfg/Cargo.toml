@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 
 anyhow = "1.0.22"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "string"] }
 ed25519-dalek = { version = "2.2", features = ["pkcs8", "alloc", "pem", "rand_core"]}
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
@@ -20,6 +20,5 @@ toml_edit = "0.23.3"
 nym-bridges = {path = "../"}
 nym-config = { git = "https://github.com/nymtech/nym.git" }
 
-
-[dev-dependencies]
 tempdir = "0.3"
+reqwest = { version = "0.12", features = ["json", "blocking"] }

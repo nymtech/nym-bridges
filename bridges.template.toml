@@ -52,7 +52,7 @@ listen = "[::]:4443"
 
 # # Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based
 # # self signed certs
-# private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity.pem'
+# private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_bridge_identity.pem'
 
 # # Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
 # # certificates. Used only if `private_ed25519_identity_key_file` is not provided.
