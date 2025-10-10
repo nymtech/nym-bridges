@@ -57,10 +57,9 @@ jobs:
         run: lintian target/debian/nym-bridge*.deb
 
       - name: Upload Artifact
-        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: nym-binaries-artifacts
+          name: nym-bridge-artifacts
           path: |
             target/release/nym-bridge
             target/release/nym-cfg
