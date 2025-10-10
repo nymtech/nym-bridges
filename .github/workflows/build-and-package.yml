@@ -2,6 +2,7 @@
 name: ci-build-upload-binaries
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: "14 0 * * *"
 
