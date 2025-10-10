@@ -16,7 +16,7 @@ Check build artifacts
 
 ```sh
 # check simple debian best practices 
-lintian target/debian/nym-bridge_0.1.0-1_amd64.de
+lintian target/debian/nym-bridge_0.1.0-1_amd64.deb
 
 # look at files included in package
 mkdir debdir
