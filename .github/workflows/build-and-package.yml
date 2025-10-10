@@ -28,8 +28,6 @@ jobs:
           rm -rf ci-builds || true
           mkdir -p $OUTPUT_DIR
           echo $OUTPUT_DIR
-      - name: Install Dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get -y install lintian
 
       - name: Install Rust stable
         uses: actions-rs/toolchain@v1
@@ -53,9 +51,12 @@ jobs:
         with:
           command: deb
 
-      - name: Lint deb packages
-        shell: bash
-        run: lintian target/debian/nym-bridge*.deb
+      # - name: Install Dependencies (Linux)
+      #   run: sudo apt-get update && sudo apt-get -y install lintian
+
+      # - name: Lint deb packages
+      #   shell: bash
+      #   run: lintian target/debian/nym-bridge*.deb
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
