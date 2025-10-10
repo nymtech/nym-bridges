@@ -1,0 +1,35 @@
+#!/bin/sh
+set -e
+
+BRIDGES_CONF_DIR="/etc/nym/"
+BRIDGES_CONF="${BRIDGES_CONF_DIR}bridges.toml"
+BRIDGES_CONF_PERMS=640
+BRIDGES_HOME="/var/lib/nym/"
+BRIDGES_USER="nym"
+
+create_user() {
+    if id ${BRIDGES_USER} > /dev/null 2>&1; then return; fi
+    adduser --system --home "${BRIDGES_HOME}" --group ${BRIDGES_USER}
+}
+
+create_first_time_configuration() {
+    if [ ! -f "${BRIDGES_CONF}" ]; then
+        # generate a config file using the default filesystem locations
+        bridge-cfg --gen
+
+        # Ensure that the config file has the correct ownership
+        chown ${BRIDGES_USER}:${BRIDGES_USER} ${BRIDGES_CONF}
+        
+        # Ensure that the config file has the correct permissions
+        chmod ${BRIDGES_CONF_PERMS} ${BRIDGES_CONF}
+    fi
+}
+
+case "$1" in
+configure)
+    create_user
+    create_first_time_configuration
+    ;;
+esac
+
+#DEBHELPER#

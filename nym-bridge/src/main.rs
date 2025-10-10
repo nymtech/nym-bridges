@@ -23,7 +23,8 @@ struct Args {
         long = "config",
         default_value = "/etc/nym/default-nym-node/bridges.toml"
     )]
-    /// Provide a path to the configuration for launching server listeners
+    /// Specify the path to the config file to load. If no file path is provided, a default path
+    /// will be assumed.
     config_path: PathBuf,
 }
 

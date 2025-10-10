@@ -33,27 +33,27 @@ listen = "[::]:4443"
 
 # Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based
 # self signed certs
-private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity.pem'
+# private_ed25519_identity_key_file = '/etc/nym/keys/ed25519_bridge_identity.pem'
 
 # Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
 # certificates. Used only if `private_ed25519_identity_key_file` is not provided.
 # identity_key = "<base64 encoded identity private key>"
 
 
-[[transports]]
-transport_type = "tls_plain"
+# [[transports]]
+# transport_type = "tls_plain"
 
-[transports.args]
-# (TCP) Socket address to listen on
-listen = "[::]:4443"
+# [transports.args]
+# # (TCP) Socket address to listen on
+# listen = "[::]:4443"
 
-# Maximum number of concurrent connections to allow
-# connection_limit = 0
+# # Maximum number of concurrent connections to allow
+# # connection_limit = 0
 
-# Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based
-# self signed certs
-private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity.pem'
+# # Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based
+# # self signed certs
+# private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_bridge_identity.pem'
 
-# Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
-# certificates. Used only if `private_ed25519_identity_key_file` is not provided.
-# identity_key = "<base64 encoded identity private key>"
+# # Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
+# # certificates. Used only if `private_ed25519_identity_key_file` is not provided.
+# # identity_key = "<base64 encoded identity private key>"
