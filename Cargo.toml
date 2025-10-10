@@ -29,8 +29,8 @@ log = "0.4"
 once_cell = "1.19"
 pem = "3.0.5"
 pin-project-lite = "0.2"
-quinn-proto = "0.11"
-quinn = "0.11"
+quinn = {version = "0.11", default-features = false, features = ["ring", "rustls", "runtime-tokio"] }
+quinn-proto = {version = "0.11", default-features = false, features = ["rustls"] }
 rand = "0.8"
 rcgen = "0.14"
 ring = "0.17"
@@ -62,9 +62,7 @@ webpki-roots = "0.26"
 #
 # Note that as the postinst script uses the adduser command we declare a
 # dependency on the adduser package to keep the lintian tool happy.
-# Note: krill.conf is deliberately NOT specified as a "conf-file" because it is
-# generated.
-# 
+#
 # See:
 #   - https://github.com/mmstick/cargo-deb
 #   - https://lintian.debian.org/tags/systemd-service-file-outside-lib.html
