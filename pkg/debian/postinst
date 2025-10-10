@@ -5,7 +5,6 @@ BRIDGES_CONF_DIR="/etc/nym/"
 BRIDGES_CONF="${BRIDGES_CONF_DIR}bridges.toml"
 BRIDGES_CONF_PERMS=640
 BRIDGES_HOME="/var/lib/nym/"
-BRIDGES_DATA="${BRIDGES_HOME}data/"
 BRIDGES_USER="nym"
 
 create_user() {
@@ -15,8 +14,8 @@ create_user() {
 
 create_first_time_configuration() {
     if [ ! -f "${BRIDGES_CONF}" ]; then
-        # generate a config file using our preferred filesystem locations
-        bridge-cfg --dir ${BRIDGES_CONF_DIR}
+        # generate a config file using the default filesystem locations
+        bridge-cfg --gen
 
         # Ensure that the config file has the correct ownership
         chown ${BRIDGES_USER}:${BRIDGES_USER} ${BRIDGES_CONF}
