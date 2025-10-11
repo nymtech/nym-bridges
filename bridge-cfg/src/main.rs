@@ -181,10 +181,14 @@ impl ConfigArgs {
         if self.dry_run {
             // print diff for files to be modified (with key materials redacted if using --gen)
             node_cfg.print_diff(&config_run.input.node_cfg, &config_run.paths.node_cfg_path);
+            println!("\n");
+
             bridge_client_cfg.print_diff(
                 config_run.input.bridge_client_cfg.as_ref(),
                 config_run.paths.bridge_client_cfg_path,
             );
+            println!("\n");
+
             bridge_cfg.print_diff(
                 config_run.input.bridge_cfg.as_ref(),
                 Some(config_run.paths.bridge_cfg_path_out),
@@ -198,11 +202,9 @@ impl ConfigArgs {
             }
 
             // nym-node
-            println!();
             node_cfg.serialize_to_file(&config_run.paths.node_cfg_path)?;
 
             // bridge client config
-            println!();
             bridge_client_cfg.serialize_to_file(config_run.paths.bridge_client_cfg_path)?;
         }
 
@@ -293,7 +295,7 @@ struct ConfigsOut {
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
         .init();
 
     let args = ConfigArgs::parse();

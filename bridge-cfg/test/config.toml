@@ -305,5 +305,3 @@ reply_surb_database = '/home/nym/.nym/nym-nodes/default-nym-node/data/auth_persi
 # but in this case it just has the basic information of "we're using custom gateway".
 # Due to how clients are started up, this file has to exist.
 gateway_registrations = '/home/nym/.nym/nym-nodes/default-nym-node/data/auth_gateways_info_store.sqlite'
-
-

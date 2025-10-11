@@ -46,14 +46,14 @@ The [`bridge-cfg`](../bridge-cfg/) tool is provided to assist with key generatio
 management -- for more details on automatic configuration see
 [`bridge-cfg/README.md`](../bridge-cfg/README.md).
 
-This tool assumes that the `nym-bridge` is going to be run alongside a `nym-node`
+This tool assumes that the `nym-bridge` is going to be run alongside a `nym-node`, but attempts to configure expected defaults if a nym-node config is not present.
 
 ```sh
-# Try a dry run to preview the configuration changes
-bridge-cfg -d "$HOME/.nym/nym-nodes/default-nym-node/config/" --dry-run
+# Try a dry run to preview the configuration changes / file locations
+bridge-cfg --gen --dry-run
 
 # Allow configuration changes to be persisted
-bridge-cfg -d "$HOME/.nym/nym-nodes/default-nym-node/config/"
+bridge-cfg --gen
 ```
 
 Manual configuration instructions can be found in [`nym-bridge/README.md`](./nym-bridge/README.md)
