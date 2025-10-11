@@ -64,6 +64,6 @@ jobs:
           name: nym-bridge-artifacts
           path: |
             target/release/nym-bridge
-            target/release/nym-cfg
+            target/release/bridge-cfg
             target/debian/nym-bridge*.deb
           retention-days: 30
