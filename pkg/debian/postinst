@@ -10,10 +10,17 @@ BRIDGES_USER="nym"
 create_user() {
     if id ${BRIDGES_USER} > /dev/null 2>&1; then return; fi
     adduser --system --home "${BRIDGES_HOME}" --group ${BRIDGES_USER}
+    
+    # Ensure home directory exists with correct permissions
+    mkdir -p "${BRIDGES_HOME}"
+    chown ${BRIDGES_USER}:${BRIDGES_USER} "${BRIDGES_HOME}"
 }
 
 create_first_time_configuration() {
     if [ ! -f "${BRIDGES_CONF}" ]; then
+        # Ensure config directory exists
+        mkdir -p "${BRIDGES_CONF_DIR}"
+        
         # generate a config file using the default filesystem locations
         bridge-cfg --gen
 
