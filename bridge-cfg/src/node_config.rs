@@ -88,12 +88,18 @@ impl NodeConfig {
                 }
             },
             NodeConfigInner::File { inner } => {
-                let public_ips = inner["host"]["public_ips"].as_array()?;
-                public_ips
-                    .iter()
-                    .map(|s| s.as_str().unwrap().parse::<IpAddr>().ok())
-                    .filter(Option::is_some)
-                    .collect()
+                if let Some(host) = inner.get("host") {
+                    if let Some(public_ips) = host.get("public_ips").and_then(|v| v.as_array()) {
+                        Some(public_ips
+                            .iter()
+                            .filter_map(|s| s.as_str().and_then(|s| s.parse::<IpAddr>().ok()))
+                            .collect())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
         }
     }
@@ -101,9 +107,22 @@ impl NodeConfig {
     fn get_wireguard_port(&self) -> u16 {
         match &self.inner {
             NodeConfigInner::Default => 51822u16,
-            NodeConfigInner::File { inner } => inner["wireguard"]["announced_port"]
-                .as_integer()
-                .unwrap_or(51822) as u16,
+            NodeConfigInner::File { inner } => {
+                if let Some(wireguard) = inner.get("wireguard") {
+                    // Try announced_tunnel_port first (newer format)
+                    if let Some(announced_tunnel_port) = wireguard.get("announced_tunnel_port") {
+                        announced_tunnel_port.as_integer().unwrap_or(51822) as u16
+                    }
+                    // Fallback to announced_port (older format)
+                    else if let Some(announced_port) = wireguard.get("announced_port") {
+                        announced_port.as_integer().unwrap_or(51822) as u16
+                    } else {
+                        51822u16
+                    }
+                } else {
+                    51822u16
+                }
+            }
         }
     }
 
@@ -112,6 +131,16 @@ impl NodeConfig {
         match &mut self.inner {
             NodeConfigInner::Default => {}
             NodeConfigInner::File { inner } => {
+                if !inner.contains_key("gateway_tasks") {
+                    inner["gateway_tasks"] = toml_edit::table();
+                }
+                if let Some(gateway_tasks) = inner.get("gateway_tasks") {
+                    if let Some(gateway_tasks_table) = gateway_tasks.as_table() {
+                        if !gateway_tasks_table.contains_key("storage_paths") {
+                            inner["gateway_tasks"]["storage_paths"] = toml_edit::table();
+                        }
+                    }
+                }
                 inner["gateway_tasks"]["storage_paths"]["bridge_client_params"] =
                     toml_edit::value(path.to_str().unwrap())
             }
@@ -123,13 +152,137 @@ impl NodeConfig {
         match &self.inner {
             NodeConfigInner::Default => Ok(PathBuf::new()),
             NodeConfigInner::File { inner } => {
-                inner["gateway_tasks"]["storage_paths"]["bridge_client_params"]
-                    .as_str()
-                    .ok_or(anyhow!("missing bridge client params entry"))?
-                    .parse()
-                    .context("bridge client params in node config improperly formatted")
+                if let Some(gateway_tasks) = inner.get("gateway_tasks") {
+                    if let Some(storage_paths) = gateway_tasks.get("storage_paths") {
+                        if let Some(bridge_client_params) = storage_paths.get("bridge_client_params") {
+                            if let Some(path_str) = bridge_client_params.as_str() {
+                                return path_str.parse().context("bridge client params in node config improperly formatted");
+                            }
+                        }
+                    }
+                }
+                Err(anyhow!("missing bridge client params entry"))
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_malformed_configs() {
+        use tempdir::TempDir;
+
+        let temp_dir = TempDir::new("nym_bridge_test").unwrap();
+        
+        let config1 = r#"
+[host]
+public_ips = ["127.0.0.1"]
+"#;
+        let file1_path = temp_dir.path().join("config1.toml");
+        std::fs::write(&file1_path, config1).unwrap();
+        let node_config1 = NodeConfig::parse_from_file(&file1_path).unwrap();
+        assert_eq!(node_config1.get_wireguard_port(), 51822);
+
+        let config2 = r#"
+[host]
+public_ips = ["1.2.3.4"]
+
+[wireguard]
+enabled = true
+bind_address = '[::]:51822'
+announced_tunnel_port = 12345
+announced_metadata_port = 51830
+"#;
+        let file2_path = temp_dir.path().join("config2.toml");
+        std::fs::write(&file2_path, config2).unwrap();
+        let node_config2 = NodeConfig::parse_from_file(&file2_path).unwrap();
+        assert_eq!(node_config2.get_wireguard_port(), 12345);
+        let ips = node_config2.public_ips();
+        assert!(ips.is_some());
+        assert!(ips.unwrap().contains(&"1.2.3.4".parse().unwrap()));
+
+        let config3 = r#"
+[host]
+public_ips = ["127.0.0.1"]
+
+[wireguard]
+announced_port = 9999
+"#;
+        let file3_path = temp_dir.path().join("config3.toml");
+        std::fs::write(&file3_path, config3).unwrap();
+        let node_config3 = NodeConfig::parse_from_file(&file3_path).unwrap();
+        assert_eq!(node_config3.get_wireguard_port(), 9999);
+
+        let config4 = r#"
+# Empty config
+"#;
+        let file4_path = temp_dir.path().join("config4.toml");
+        std::fs::write(&file4_path, config4).unwrap();
+        let node_config4 = NodeConfig::parse_from_file(&file4_path).unwrap();
+        assert_eq!(node_config4.get_wireguard_port(), 51822);
+        assert_eq!(node_config4.public_ips(), None);
+
+        let config5 = r#"
+[host]
+public_ips = ["invalid-ip", "127.0.0.1", "1.2.3.4"]
+"#;
+        let file5_path = temp_dir.path().join("config5.toml");
+        std::fs::write(&file5_path, config5).unwrap();
+        let node_config5 = NodeConfig::parse_from_file(&file5_path).unwrap();
+        let ips = node_config5.public_ips();
+        assert!(ips.is_some());
+        assert_eq!(ips.unwrap().len(), 2);
+
+        let real_world_config = r#"
+[host]
+public_ips = [
+'1.2.3.4',
+]
+
+[wireguard]
+enabled = true
+bind_address = '[::]:51822'
+announced_tunnel_port = 51822
+announced_metadata_port = 51830
+
+[gateway_tasks.storage_paths]
+clients_storage = '/root/.nym/nym-nodes/default-nym-node/data/clients.sqlite'
+stats_storage = '/root/.nym/nym-nodes/default-nym-node/data/stats.sqlite'
+cosmos_mnemonic = '/root/.nym/nym-nodes/default-nym-node/data/cosmos_mnemonic'
+"#;
+        let file6_path = temp_dir.path().join("config6.toml");
+        std::fs::write(&file6_path, real_world_config).unwrap();
+        let node_config6 = NodeConfig::parse_from_file(&file6_path).unwrap();
+        assert_eq!(node_config6.get_wireguard_port(), 51822);
+        let ips = node_config6.public_ips();
+        assert!(ips.is_some());
+        assert!(ips.unwrap().contains(&"1.2.3.4".parse().unwrap()));
+
+        let integrated_config = r#"
+[host]
+public_ips = [
+'1.2.3.4',
+]
+
+[wireguard]
+enabled = true
+bind_address = '0.0.0.0:51822'
+announced_tunnel_port = 51822
+announced_metadata_port = 51830
+
+[gateway_tasks.storage_paths]
+clients_storage = '/root/.nym/nym-nodes/default-nym-node/data/clients.sqlite'
+stats_storage = '/root/.nym/nym-nodes/default-nym-node/data/stats.sqlite'
+cosmos_mnemonic = '/root/.nym/nym-nodes/default-nym-node/data/cosmos_mnemonic'
+bridge_client_params = '/etc/nym/client_bridge_params.json'
+"#;
+        let file7_path = temp_dir.path().join("config7.toml");
+        std::fs::write(&file7_path, integrated_config).unwrap();
+        let node_config7 = NodeConfig::parse_from_file(&file7_path).unwrap();
+        assert_eq!(node_config7.get_wireguard_port(), 51822);
+        let ips = node_config7.public_ips();
+        assert!(ips.is_some());
+        assert!(ips.unwrap().contains(&"1.2.3.4".parse().unwrap()));
+
+        println!("All malformed config tests passed!");
     }
 
     pub fn serialize(&self) -> String {
@@ -240,5 +393,54 @@ mod test {
         );
 
         assert_eq!(node_config.get_wireguard_port(), 51822);
+    }
+
+    #[test]
+    fn test_malformed_configs() {
+        NodeConfig::test_malformed_configs();
+    }
+
+    #[test]
+    fn test_default_config() {
+        let config = NodeConfig::new_without_node();
+        assert_eq!(config.get_wireguard_port(), 51822);
+        // public_ips() might return None or Some depending on network
+        let _ = config.public_ips();
+    }
+
+    #[test]
+    fn test_integrated_config_parsing() {
+        use tempdir::TempDir;
+
+        let temp_dir = TempDir::new("nym_bridge_integrated_test").unwrap();
+        
+        // Test config that already has bridge integration
+        let integrated_config = r#"
+[host]
+public_ips = ['1.2.3.4']
+
+[wireguard]
+enabled = true
+announced_tunnel_port = 51822
+
+[gateway_tasks.storage_paths]
+bridge_client_params = '/etc/nym/client_bridge_params.json'
+"#;
+        let file_path = temp_dir.path().join("integrated_config.toml");
+        std::fs::write(&file_path, integrated_config).unwrap();
+        
+        let node_config = NodeConfig::parse_from_file(&file_path).unwrap();
+        
+        // Test that we can read the bridge client config path
+        let bridge_path = node_config.get_bridge_client_config_path().unwrap();
+        assert_eq!(bridge_path, std::path::PathBuf::from("/etc/nym/client_bridge_params.json"));
+        
+        // Test other functions work
+        assert_eq!(node_config.get_wireguard_port(), 51822);
+        let ips = node_config.public_ips();
+        assert!(ips.is_some());
+        assert!(ips.unwrap().contains(&"1.2.3.4".parse().unwrap()));
+        
+        println!("Integrated config parsing test passed!");
     }
 }

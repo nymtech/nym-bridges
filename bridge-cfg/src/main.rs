@@ -308,6 +308,17 @@ fn main() -> Result<()> {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_node_config_parsing() {
+        // test our node config parsing handles malformed configs
+        node_config::NodeConfig::test_malformed_configs();
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod test {
     use super::*;
     use nym_bridges::config::{
