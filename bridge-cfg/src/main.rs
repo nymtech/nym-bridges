@@ -237,12 +237,22 @@ impl ConfigRun {
             bridge_cfg.generate_keys(self.opts.allow_overwrite, &self.paths.key_dir)?;
         }
 
-        // Always try to detect public IPs and update the bridge config
-        if let Ok(public_ips) = crate::node_config::get_public_ip_addrs() {
-            info!("detected public IPs: {:?}", public_ips);
-            bridge_cfg.set_public_ips(public_ips);
-        } else {
-            warn!("could not detect public IPs, using default values");
+        // Set public IPs for bridge config:
+        // 1. If bridge config already has IPs, keep them (existing config)
+        // 2. Otherwise, use nym-node config IPs if available
+        // 3. Otherwise, detect public IPs from the internet
+        if bridge_cfg.get_public_ips().is_empty() {
+            if let Some(node_ips) = node_cfg.public_ips() {
+                if !node_ips.is_empty() {
+                    debug!("using public IPs from nym-node config: {:?}", node_ips);
+                    bridge_cfg.set_public_ips(node_ips);
+                }
+            } else if let Ok(detected_ips) = crate::node_config::get_public_ip_addrs() {
+                info!("detected public IPs from internet: {:?}", detected_ips);
+                bridge_cfg.set_public_ips(detected_ips);
+            } else {
+                warn!("could not determine public IPs");
+            }
         }
 
         // adapt the nym-bridge configuration
@@ -340,7 +350,10 @@ mod tests {
                 }
             }
             Err(e) => {
-                println!("Public IP detection failed (expected in some environments): {}", e);
+                println!(
+                    "Public IP detection failed (expected in some environments): {}",
+                    e
+                );
                 // This is OK - some environments (CI, containers) may not have internet access
             }
         }
@@ -350,64 +363,83 @@ mod tests {
     fn test_bridge_config_with_detected_ips() {
         // Test that bridge config can be updated with detected IPs
         let mut bridge_cfg = bridge_config::BridgeConfig::default();
-        
+
         // Simulate detected IPs
-        let test_ips = vec![
-            "1.2.3.4".parse().unwrap(),
-            "2001:db8::1".parse().unwrap(),
-        ];
-        
+        let test_ips = vec!["1.2.3.4".parse().unwrap(), "2001:db8::1".parse().unwrap()];
+
         bridge_cfg.set_public_ips(test_ips.clone());
-        
+
         // Verify the config was updated
         let serialized = bridge_cfg.serialize();
         assert!(serialized.contains("1.2.3.4"));
         assert!(serialized.contains("2001:db8::1"));
-        
+
         println!("Bridge config with detected IPs: {}", serialized);
     }
 
     #[test]
     fn test_quic_client_config_generation() {
-        // Test that QUIC client config is generated with correct format
-        let mut bridge_cfg = bridge_config::BridgeConfig::default();
+        use tempdir::TempDir;
         
+        // Test that QUIC client config is generated with correct format
+        let temp_dir = TempDir::new("bridges").unwrap();
+        let key_dir = temp_dir.path();
+        
+        let mut bridge_cfg = bridge_config::BridgeConfig::default();
+
         // Set test public IPs
         let test_ips = vec![
             "139.162.33.226".parse().unwrap(),
             "2400:8901::2000:faff:fea6:87f2".parse().unwrap(),
         ];
         bridge_cfg.set_public_ips(test_ips);
-        
+
+        // Generate keys first
+        bridge_cfg.generate_keys(true, key_dir).unwrap();
+
         // Generate client config
-        let client_config = bridge_client_config::BridgeClientConfig::try_from(&bridge_cfg).unwrap();
+        let client_config =
+            bridge_client_config::BridgeClientConfig::try_from(&bridge_cfg).unwrap();
         let client_json = client_config.serialize().unwrap();
-        
+
         // Parse the JSON to verify structure
         let parsed: serde_json::Value = serde_json::from_str(&client_json).unwrap();
-        
+
         // Verify version
         assert_eq!(parsed["version"], "0");
-        
+
         // Verify transport type
         assert_eq!(parsed["transports"][0]["transport_type"], "quic_plain");
-        
+
         // Verify addresses contain our test IPs
         let addresses = &parsed["transports"][0]["args"]["addresses"];
         assert!(addresses.is_array());
-        
-        let address_strings: Vec<String> = addresses.as_array().unwrap()
+
+        let address_strings: Vec<String> = addresses
+            .as_array()
+            .unwrap()
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
-        
+
         // Should contain both IPv4 and IPv6 addresses with port 4443
-        assert!(address_strings.iter().any(|addr| addr.contains("139.162.33.226:4443")));
-        assert!(address_strings.iter().any(|addr| addr.contains("[2400:8901::2000:faff:fea6:87f2]:4443")));
-        
+        assert!(
+            address_strings
+                .iter()
+                .any(|addr| addr.contains("139.162.33.226:4443"))
+        );
+        assert!(
+            address_strings
+                .iter()
+                .any(|addr| addr.contains("[2400:8901::2000:faff:fea6:87f2]:4443"))
+        );
+
         // Verify host field
-        assert_eq!(parsed["transports"][0]["args"]["host"], "netdna.bootstrapcdn.com");
-        
+        assert_eq!(
+            parsed["transports"][0]["args"]["host"],
+            "netdna.bootstrapcdn.com"
+        );
+
         println!("Generated QUIC client config: {}", client_json);
     }
 }
@@ -517,8 +549,8 @@ pub(crate) mod test {
             .iter()
             .for_each(|transport| match transport {
                 ClientConfig::QuicPlain(cfg) => {
-                    assert!(cfg.addresses.contains(&"[fe80::1]:4443".parse().unwrap()));
-                    assert!(cfg.addresses.contains(&"192.168.0.1:4443".parse().unwrap()));
+                    assert!(cfg.addresses.contains(&"[2a01::1]:4443".parse().unwrap()));
+                    assert!(cfg.addresses.contains(&"1.1.1.1:4443".parse().unwrap()));
                 }
                 ClientConfig::TlsPlain(_cfg) => todo!(),
             });

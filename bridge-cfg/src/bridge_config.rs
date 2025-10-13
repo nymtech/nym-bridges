@@ -153,8 +153,22 @@ impl BridgeConfig {
 
     pub fn set_public_ips(&mut self, ips: Vec<std::net::IpAddr>) {
         debug!("setting public IPs for bridge config: {:?}", ips);
-        let ip_strings: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
-        self.inner["public_ips"] = toml_edit::value(ip_strings);
+        let mut ip_array = toml_edit::Array::new();
+        for ip in ips {
+            ip_array.push(ip.to_string());
+        }
+        self.inner["public_ips"] = toml_edit::value(ip_array);
+    }
+
+    pub fn get_public_ips(&self) -> Vec<std::net::IpAddr> {
+        if let Some(public_ips) = self.inner.get("public_ips").and_then(|v| v.as_array()) {
+            public_ips
+                .iter()
+                .filter_map(|s| s.as_str().and_then(|s| s.parse::<std::net::IpAddr>().ok()))
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 
     pub fn print_diff(&self, other: Option<&Self>, path: Option<PathBuf>, key_dir: &Path) {

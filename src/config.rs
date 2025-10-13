@@ -163,7 +163,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
             }
         }
         Ok(Self {
-            version: "0.0.0".into(),
+            version: "0".into(),
             transports,
         })
     }

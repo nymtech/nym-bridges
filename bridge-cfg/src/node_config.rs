@@ -72,7 +72,7 @@ impl NodeConfig {
         SocketAddr::new(address, port)
     }
 
-    fn public_ips(&self) -> Option<Vec<IpAddr>> {
+    pub fn public_ips(&self) -> Option<Vec<IpAddr>> {
         match &self.inner {
             NodeConfigInner::Default => match get_public_ip_addrs() {
                 Ok(public_ips) => {
@@ -89,14 +89,12 @@ impl NodeConfig {
             },
             NodeConfigInner::File { inner } => {
                 if let Some(host) = inner.get("host") {
-                    if let Some(public_ips) = host.get("public_ips").and_then(|v| v.as_array()) {
-                        Some(public_ips
+                    host.get("public_ips").and_then(|v| v.as_array()).map(|public_ips| {
+                        public_ips
                             .iter()
                             .filter_map(|s| s.as_str().and_then(|s| s.parse::<IpAddr>().ok()))
-                            .collect())
-                    } else {
-                        None
-                    }
+                            .collect()
+                    })
                 } else {
                     None
                 }
@@ -134,12 +132,11 @@ impl NodeConfig {
                 if !inner.contains_key("gateway_tasks") {
                     inner["gateway_tasks"] = toml_edit::table();
                 }
-                if let Some(gateway_tasks) = inner.get("gateway_tasks") {
-                    if let Some(gateway_tasks_table) = gateway_tasks.as_table() {
-                        if !gateway_tasks_table.contains_key("storage_paths") {
-                            inner["gateway_tasks"]["storage_paths"] = toml_edit::table();
-                        }
-                    }
+                if let Some(gateway_tasks) = inner.get("gateway_tasks")
+                    && let Some(gateway_tasks_table) = gateway_tasks.as_table()
+                    && !gateway_tasks_table.contains_key("storage_paths")
+                {
+                    inner["gateway_tasks"]["storage_paths"] = toml_edit::table();
                 }
                 inner["gateway_tasks"]["storage_paths"]["bridge_client_params"] =
                     toml_edit::value(path.to_str().unwrap())
@@ -154,9 +151,13 @@ impl NodeConfig {
             NodeConfigInner::File { inner } => {
                 if let Some(gateway_tasks) = inner.get("gateway_tasks") {
                     if let Some(storage_paths) = gateway_tasks.get("storage_paths") {
-                        if let Some(bridge_client_params) = storage_paths.get("bridge_client_params") {
+                        if let Some(bridge_client_params) =
+                            storage_paths.get("bridge_client_params")
+                        {
                             if let Some(path_str) = bridge_client_params.as_str() {
-                                return path_str.parse().context("bridge client params in node config improperly formatted");
+                                return path_str.parse().context(
+                                    "bridge client params in node config improperly formatted",
+                                );
                             }
                         }
                     }
@@ -171,7 +172,7 @@ impl NodeConfig {
         use tempdir::TempDir;
 
         let temp_dir = TempDir::new("nym_bridge_test").unwrap();
-        
+
         let config1 = r#"
 [host]
 public_ips = ["127.0.0.1"]
@@ -328,7 +329,7 @@ bridge_client_params = '/etc/nym/client_bridge_params.json'
     }
 }
 
-fn get_public_ip_addrs() -> Result<Vec<IpAddr>> {
+pub fn get_public_ip_addrs() -> Result<Vec<IpAddr>> {
     info!("attempting to fetch public IPs from api.ipify.org");
     let mut ips = Vec::new();
 
@@ -413,7 +414,7 @@ mod test {
         use tempdir::TempDir;
 
         let temp_dir = TempDir::new("nym_bridge_integrated_test").unwrap();
-        
+
         // Test config that already has bridge integration
         let integrated_config = r#"
 [host]
@@ -428,19 +429,22 @@ bridge_client_params = '/etc/nym/client_bridge_params.json'
 "#;
         let file_path = temp_dir.path().join("integrated_config.toml");
         std::fs::write(&file_path, integrated_config).unwrap();
-        
+
         let node_config = NodeConfig::parse_from_file(&file_path).unwrap();
-        
+
         // Test that we can read the bridge client config path
         let bridge_path = node_config.get_bridge_client_config_path().unwrap();
-        assert_eq!(bridge_path, std::path::PathBuf::from("/etc/nym/client_bridge_params.json"));
-        
+        assert_eq!(
+            bridge_path,
+            std::path::PathBuf::from("/etc/nym/client_bridge_params.json")
+        );
+
         // Test other functions work
         assert_eq!(node_config.get_wireguard_port(), 51822);
         let ips = node_config.public_ips();
         assert!(ips.is_some());
         assert!(ips.unwrap().contains(&"1.2.3.4".parse().unwrap()));
-        
+
         println!("Integrated config parsing test passed!");
     }
 }
