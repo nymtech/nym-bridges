@@ -294,7 +294,7 @@ bridge_client_params = '/etc/nym/client_bridge_params.json'
 
     pub fn serialize_to_file(&self, path: &PathBuf) -> Result<()> {
         if matches!(self.inner, NodeConfigInner::Default) {
-            error!("attempted tp serialize \"Default\" node config to file");
+            warn!("no nym-node config found, using default values for bridge configuration");
             return Ok(());
         }
 
