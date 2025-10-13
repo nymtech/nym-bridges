@@ -237,6 +237,14 @@ impl ConfigRun {
             bridge_cfg.generate_keys(self.opts.allow_overwrite, &self.paths.key_dir)?;
         }
 
+        // Always try to detect public IPs and update the bridge config
+        if let Ok(public_ips) = crate::node_config::get_public_ip_addrs() {
+            info!("detected public IPs: {:?}", public_ips);
+            bridge_cfg.set_public_ips(public_ips);
+        } else {
+            warn!("could not detect public IPs, using default values");
+        }
+
         // adapt the nym-bridge configuration
         let forward_address = node_cfg.get_forward_address();
         bridge_cfg.set_forward_address(forward_address);
@@ -315,6 +323,92 @@ mod tests {
     fn test_node_config_parsing() {
         // test our node config parsing handles malformed configs
         node_config::NodeConfig::test_malformed_configs();
+    }
+
+    #[test]
+    fn test_public_ip_detection() {
+        // Test that public IP detection works (this may fail in CI/containers)
+        let result = node_config::get_public_ip_addrs();
+        match result {
+            Ok(ips) => {
+                println!("Detected public IPs: {:?}", ips);
+                // Should have at least one IP (IPv4 or IPv6)
+                assert!(!ips.is_empty());
+                // IPs should be valid
+                for ip in ips {
+                    assert!(ip.is_ipv4() || ip.is_ipv6());
+                }
+            }
+            Err(e) => {
+                println!("Public IP detection failed (expected in some environments): {}", e);
+                // This is OK - some environments (CI, containers) may not have internet access
+            }
+        }
+    }
+
+    #[test]
+    fn test_bridge_config_with_detected_ips() {
+        // Test that bridge config can be updated with detected IPs
+        let mut bridge_cfg = bridge_config::BridgeConfig::default();
+        
+        // Simulate detected IPs
+        let test_ips = vec![
+            "1.2.3.4".parse().unwrap(),
+            "2001:db8::1".parse().unwrap(),
+        ];
+        
+        bridge_cfg.set_public_ips(test_ips.clone());
+        
+        // Verify the config was updated
+        let serialized = bridge_cfg.serialize();
+        assert!(serialized.contains("1.2.3.4"));
+        assert!(serialized.contains("2001:db8::1"));
+        
+        println!("Bridge config with detected IPs: {}", serialized);
+    }
+
+    #[test]
+    fn test_quic_client_config_generation() {
+        // Test that QUIC client config is generated with correct format
+        let mut bridge_cfg = bridge_config::BridgeConfig::default();
+        
+        // Set test public IPs
+        let test_ips = vec![
+            "139.162.33.226".parse().unwrap(),
+            "2400:8901::2000:faff:fea6:87f2".parse().unwrap(),
+        ];
+        bridge_cfg.set_public_ips(test_ips);
+        
+        // Generate client config
+        let client_config = bridge_client_config::BridgeClientConfig::try_from(&bridge_cfg).unwrap();
+        let client_json = client_config.serialize().unwrap();
+        
+        // Parse the JSON to verify structure
+        let parsed: serde_json::Value = serde_json::from_str(&client_json).unwrap();
+        
+        // Verify version
+        assert_eq!(parsed["version"], "0");
+        
+        // Verify transport type
+        assert_eq!(parsed["transports"][0]["transport_type"], "quic_plain");
+        
+        // Verify addresses contain our test IPs
+        let addresses = &parsed["transports"][0]["args"]["addresses"];
+        assert!(addresses.is_array());
+        
+        let address_strings: Vec<String> = addresses.as_array().unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        
+        // Should contain both IPv4 and IPv6 addresses with port 4443
+        assert!(address_strings.iter().any(|addr| addr.contains("139.162.33.226:4443")));
+        assert!(address_strings.iter().any(|addr| addr.contains("[2400:8901::2000:faff:fea6:87f2]:4443")));
+        
+        // Verify host field
+        assert_eq!(parsed["transports"][0]["args"]["host"], "netdna.bootstrapcdn.com");
+        
+        println!("Generated QUIC client config: {}", client_json);
     }
 }
 

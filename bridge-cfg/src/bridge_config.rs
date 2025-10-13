@@ -151,6 +151,12 @@ impl BridgeConfig {
         self.inner[CLIENT_PARAMS_PATH_FIELD] = toml_edit::value(path.to_str().unwrap());
     }
 
+    pub fn set_public_ips(&mut self, ips: Vec<std::net::IpAddr>) {
+        debug!("setting public IPs for bridge config: {:?}", ips);
+        let ip_strings: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+        self.inner["public_ips"] = toml_edit::value(ip_strings);
+    }
+
     pub fn print_diff(&self, other: Option<&Self>, path: Option<PathBuf>, key_dir: &Path) {
         let old = other.map(Self::serialize).unwrap_or_default();
         let new = self.serialize();
