@@ -146,7 +146,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
                     transports.push(ClientConfig::QuicPlain(quic::ClientOptions {
                         addresses,
-                        host: None,
+                        host: Some("netdna.bootstrapcdn.com".to_string()),
                         id_pubkey,
                     }));
                 }
@@ -156,7 +156,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
                     transports.push(ClientConfig::TlsPlain(tls::ClientOptions {
                         addresses,
-                        host: None,
+                        host: Some("netdna.bootstrapcdn.com".to_string()),
                         id_pubkey,
                     }));
                 }

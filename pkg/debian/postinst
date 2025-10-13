@@ -21,6 +21,9 @@ create_first_time_configuration() {
         # Ensure config directory exists
         mkdir -p "${BRIDGES_CONF_DIR}"
         
+        mkdir -p "${BRIDGES_CONF_DIR}keys"
+        chown ${BRIDGES_USER}:${BRIDGES_USER} "${BRIDGES_CONF_DIR}keys"
+        
         # generate a config file using the default filesystem locations
         bridge-cfg --gen
 
@@ -32,10 +35,18 @@ create_first_time_configuration() {
     fi
 }
 
+configure_firewall() {
+    # Open port 4443 for nym-bridge QUIC traffic
+    if command -v ufw >/dev/null 2>&1; then
+        ufw allow 4443/udp comment "nym-bridge QUIC transport" 2>/dev/null || true
+    fi
+}
+
 case "$1" in
 configure)
     create_user
     create_first_time_configuration
+    configure_firewall
     ;;
 esac
 
