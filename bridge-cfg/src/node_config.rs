@@ -6,7 +6,9 @@
 //!
 //! [Original Config](https://github.com/nymtech/nym/blob/develop/nym-node/src/config/mod.rs)
 
-use anyhow::{Context, Result, anyhow};
+#[cfg(test)]
+use anyhow::anyhow;
+use anyhow::{Context, Result};
 use toml_edit::DocumentMut;
 use tracing::*;
 
@@ -89,12 +91,14 @@ impl NodeConfig {
             },
             NodeConfigInner::File { inner } => {
                 if let Some(host) = inner.get("host") {
-                    host.get("public_ips").and_then(|v| v.as_array()).map(|public_ips| {
-                        public_ips
-                            .iter()
-                            .filter_map(|s| s.as_str().and_then(|s| s.parse::<IpAddr>().ok()))
-                            .collect()
-                    })
+                    host.get("public_ips")
+                        .and_then(|v| v.as_array())
+                        .map(|public_ips| {
+                            public_ips
+                                .iter()
+                                .filter_map(|s| s.as_str().and_then(|s| s.parse::<IpAddr>().ok()))
+                                .collect()
+                        })
                 } else {
                     None
                 }
@@ -338,29 +342,46 @@ pub fn get_public_ip_addrs() -> Result<Vec<IpAddr>> {
     let ipv6_url = "https://api6.ipify.org?format=json";
 
     // Fetch IPv4 address
-    let ipv4_response: serde_json::Value = reqwest::blocking::get(ipv4_url)?.json()?;
-    if let Some(ipv4) = ipv4_response.get("ip") {
-        debug!("Public IPv4 Address: {}", ipv4);
-        ips.push(
-            ipv4.as_str()
-                .ok_or(anyhow!("failed to parse ipv4 addr"))?
-                .parse()?,
-        )
-    } else {
-        warn!("Could not retrieve IPv4 address");
+    match reqwest::blocking::get(ipv4_url).and_then(|r| r.json::<serde_json::Value>()) {
+        Ok(ipv4_response) => {
+            if let Some(ipv4) = ipv4_response.get("ip") {
+                if let Some(ipv4_str) = ipv4.as_str() {
+                    match ipv4_str.parse::<IpAddr>() {
+                        Ok(addr) => {
+                            debug!("detected public IPv4: {}", addr);
+                            ips.push(addr);
+                        }
+                        Err(e) => warn!("failed to parse IPv4 address '{}': {}", ipv4_str, e),
+                    }
+                }
+            } else {
+                warn!("no IPv4 address in response");
+            }
+        }
+        Err(e) => warn!("failed to fetch IPv4 address: {}", e),
     }
 
-    // Fetch IPv6 address
-    let ipv6_response: serde_json::Value = reqwest::blocking::get(ipv6_url)?.json()?;
-    if let Some(ipv6) = ipv6_response.get("ip") {
-        debug!("Public IPv6 Address: {}", ipv6);
-        ips.push(
-            ipv6.as_str()
-                .ok_or(anyhow!("failed to parse ipv6 addr"))?
-                .parse()?,
-        )
-    } else {
-        debug!("Could not retrieve IPv6 address");
+    // Fetch IPv6 address (non-fatal if it fails)
+    match reqwest::blocking::get(ipv6_url).and_then(|r| r.json::<serde_json::Value>()) {
+        Ok(ipv6_response) => {
+            if let Some(ipv6) = ipv6_response.get("ip") {
+                if let Some(ipv6_str) = ipv6.as_str() {
+                    match ipv6_str.parse::<IpAddr>() {
+                        Ok(addr) => {
+                            debug!("detected public IPv6: {}", addr);
+                            ips.push(addr);
+                        }
+                        Err(e) => warn!("failed to parse IPv6 address '{}': {}", ipv6_str, e),
+                    }
+                }
+            } else {
+                debug!("no IPv6 address in response");
+            }
+        }
+        Err(e) => debug!(
+            "failed to fetch IPv6 address (this is normal if IPv6 is not available): {}",
+            e
+        ),
     }
 
     Ok(ips)

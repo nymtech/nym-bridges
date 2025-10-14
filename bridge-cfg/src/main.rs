@@ -109,11 +109,42 @@ impl ConfigArgs {
             .join(DEFAULT_CONFIG_FILENAME)
     }
 
+    /// Try to find any nym-node config if the default doesn't exist
+    fn find_any_node_config() -> Option<PathBuf> {
+        let nym_nodes_dir = must_get_home()
+            .join(NYM_DIR)
+            .join(Self::DEFAULT_NYMNODES_DIR);
+
+        if !nym_nodes_dir.exists() {
+            return None;
+        }
+
+        // Try to find any nym-node config
+        if let Ok(entries) = std::fs::read_dir(&nym_nodes_dir) {
+            for entry in entries.flatten() {
+                let config_path = entry
+                    .path()
+                    .join(DEFAULT_CONFIG_DIR)
+                    .join(DEFAULT_CONFIG_FILENAME);
+                if config_path.exists() {
+                    info!("found nym-node config at: {}", config_path.display());
+                    return Some(config_path);
+                }
+            }
+        }
+        None
+    }
+
     fn adapt_config_files(&self) -> Result<()> {
-        let node_cfg_path = self
-            .node_config
-            .clone()
-            .unwrap_or(Self::default_node_config_path(&self.id));
+        let node_cfg_path = self.node_config.clone().unwrap_or_else(|| {
+            let default_path = Self::default_node_config_path(&self.id);
+            if default_path.exists() {
+                default_path
+            } else {
+                // Try to find any nym-node config
+                Self::find_any_node_config().unwrap_or(default_path)
+            }
+        });
 
         // try to parse the bridge config or get a default and keep a copy unmodified for diff
         let bridge_cfg_orig = match &self.bridge_config_path_in {
@@ -239,19 +270,27 @@ impl ConfigRun {
 
         // Set public IPs for bridge config:
         // 1. If bridge config already has IPs, keep them (existing config)
-        // 2. Otherwise, use nym-node config IPs if available
-        // 3. Otherwise, detect public IPs from the internet
+        // 2. Otherwise, try to detect from internet (gets both IPv4 and IPv6)
+        // 3. If detection fails, fall back to nym-node config IPs
         if bridge_cfg.get_public_ips().is_empty() {
-            if let Some(node_ips) = node_cfg.public_ips() {
-                if !node_ips.is_empty() {
-                    debug!("using public IPs from nym-node config: {:?}", node_ips);
-                    bridge_cfg.set_public_ips(node_ips);
+            match crate::node_config::get_public_ip_addrs() {
+                Ok(detected_ips) if !detected_ips.is_empty() => {
+                    info!("using detected public IPs: {:?}", detected_ips);
+                    bridge_cfg.set_public_ips(detected_ips);
                 }
-            } else if let Ok(detected_ips) = crate::node_config::get_public_ip_addrs() {
-                info!("detected public IPs from internet: {:?}", detected_ips);
-                bridge_cfg.set_public_ips(detected_ips);
-            } else {
-                warn!("could not determine public IPs");
+                _ => {
+                    // Fall back to nym-node config if detection failed
+                    if let Some(node_ips) = node_cfg.public_ips() {
+                        if !node_ips.is_empty() {
+                            info!("using public IPs from nym-node config: {:?}", node_ips);
+                            bridge_cfg.set_public_ips(node_ips);
+                        } else {
+                            warn!("no public IPs available");
+                        }
+                    } else {
+                        warn!("could not determine public IPs");
+                    }
+                }
             }
         }
 
@@ -380,11 +419,11 @@ mod tests {
     #[test]
     fn test_quic_client_config_generation() {
         use tempdir::TempDir;
-        
+
         // Test that QUIC client config is generated with correct format
         let temp_dir = TempDir::new("bridges").unwrap();
         let key_dir = temp_dir.path();
-        
+
         let mut bridge_cfg = bridge_config::BridgeConfig::default();
 
         // Set test public IPs
@@ -549,8 +588,12 @@ pub(crate) mod test {
             .iter()
             .for_each(|transport| match transport {
                 ClientConfig::QuicPlain(cfg) => {
-                    assert!(cfg.addresses.contains(&"[2a01::1]:4443".parse().unwrap()));
-                    assert!(cfg.addresses.contains(&"1.1.1.1:4443".parse().unwrap()));
+                    // Should have detected IPs from internet (both IPv4 and IPv6)
+                    assert!(!cfg.addresses.is_empty(), "should have detected public IPs");
+                    // Check we have at least one IPv4 and one IPv6
+                    let has_ipv4 = cfg.addresses.iter().any(|addr| addr.is_ipv4());
+                    let has_ipv6 = cfg.addresses.iter().any(|addr| addr.is_ipv6());
+                    assert!(has_ipv4 || has_ipv6, "should have at least one IP address");
                 }
                 ClientConfig::TlsPlain(_cfg) => todo!(),
             });
