@@ -153,18 +153,14 @@ impl NodeConfig {
         match &self.inner {
             NodeConfigInner::Default => Ok(PathBuf::new()),
             NodeConfigInner::File { inner } => {
-                if let Some(gateway_tasks) = inner.get("gateway_tasks") {
-                    if let Some(storage_paths) = gateway_tasks.get("storage_paths") {
-                        if let Some(bridge_client_params) =
-                            storage_paths.get("bridge_client_params")
-                        {
-                            if let Some(path_str) = bridge_client_params.as_str() {
-                                return path_str.parse().context(
-                                    "bridge client params in node config improperly formatted",
-                                );
-                            }
-                        }
-                    }
+                if let Some(gateway_tasks) = inner.get("gateway_tasks")
+                    && let Some(storage_paths) = gateway_tasks.get("storage_paths")
+                    && let Some(bridge_client_params) = storage_paths.get("bridge_client_params")
+                    && let Some(path_str) = bridge_client_params.as_str()
+                {
+                    return path_str
+                        .parse()
+                        .context("bridge client params in node config improperly formatted");
                 }
                 Err(anyhow!("missing bridge client params entry"))
             }

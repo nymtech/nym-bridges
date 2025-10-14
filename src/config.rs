@@ -288,7 +288,7 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
                 "192.168.0.1:4433".parse().unwrap(),
                 "[fe80::1]:4433".parse().unwrap(),
             ],
-            host: None,
+            host: Some("netdna.bootstrapcdn.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
         let expected_tls = tls::ClientOptions {
@@ -296,7 +296,7 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
                 "192.168.0.1:4443".parse().unwrap(),
                 "[fe80::1]:4443".parse().unwrap(),
             ],
-            host: None,
+            host: Some("netdna.bootstrapcdn.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
 
