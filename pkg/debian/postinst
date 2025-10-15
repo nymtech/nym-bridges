@@ -23,6 +23,7 @@ create_first_time_configuration() {
         
         mkdir -p "${BRIDGES_CONF_DIR}keys"
         chown ${BRIDGES_USER}:${BRIDGES_USER} "${BRIDGES_CONF_DIR}keys"
+        chmod 700 "${BRIDGES_CONF_DIR}keys"
         
         # generate a config file using the default filesystem locations
         bridge-cfg --gen
@@ -30,15 +31,48 @@ create_first_time_configuration() {
         # Ensure that the config file has the correct ownership
         chown ${BRIDGES_USER}:${BRIDGES_USER} ${BRIDGES_CONF}
         
-        # Ensure that the config file has the correct permissions
+        # Ensure that the config file has the correct permissions to prevent unauthorized access
+        # Mode 640 allows read/write for owner (nym), read for group (nym), and no access for others
         chmod ${BRIDGES_CONF_PERMS} ${BRIDGES_CONF}
+        
+        echo "================================================================"
+        echo "SECURITY NOTICE:"
+        echo "Config file created at: ${BRIDGES_CONF}"
+        echo "Permissions set to ${BRIDGES_CONF_PERMS} (owner: ${BRIDGES_USER})"
+        echo "Keys directory created at: ${BRIDGES_CONF_DIR}keys with mode 700"
+        echo ""
+        echo "To further restrict access, consider:"
+        echo "  chmod 600 ${BRIDGES_CONF}"
+        echo "================================================================"
     fi
 }
 
 configure_firewall() {
     # Open port 4443 for nym-bridge QUIC traffic
-    if command -v ufw >/dev/null 2>&1; then
+    # Try multiple firewall managers for broader compatibility
+    
+    if command -v ufw >/dev/null 2>&1 && ufw status >/dev/null 2>&1; then
+        echo "Configuring firewall with ufw..."
         ufw allow 4443/udp comment "nym-bridge QUIC transport" 2>/dev/null || true
+    elif command -v firewall-cmd >/dev/null 2>&1; then
+        echo "Configuring firewall with firewalld..."
+        firewall-cmd --permanent --add-port=4443/udp 2>/dev/null || true
+        firewall-cmd --reload 2>/dev/null || true
+    elif command -v nft >/dev/null 2>&1; then
+        echo "Detected nftables - please manually configure port 4443/udp"
+        echo "  Example: nft add rule inet filter input udp dport 4443 accept"
+    elif command -v iptables >/dev/null 2>&1; then
+        echo "Configuring firewall with iptables..."
+        iptables -I INPUT -p udp --dport 4443 -j ACCEPT 2>/dev/null || true
+        # Try to save iptables rules if iptables-persistent is available
+        if command -v netfilter-persistent >/dev/null 2>&1; then
+            netfilter-persistent save 2>/dev/null || true
+        elif command -v iptables-save >/dev/null 2>&1; then
+            iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        fi
+    else
+        echo "No supported firewall manager detected (ufw, firewalld, nftables, iptables)"
+        echo "Please manually open UDP port 4443 for nym-bridge QUIC transport"
     fi
 }
 

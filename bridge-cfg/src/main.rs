@@ -109,7 +109,13 @@ impl ConfigArgs {
             .join(DEFAULT_CONFIG_FILENAME)
     }
 
-    /// Try to find any nym-node config if the default doesn't exist
+    /// Try to find any nym-node config if the default doesn't exist.
+    ///
+    /// This function searches the nym-nodes directory for any available node configuration
+    /// when the user hasn't specified a config path and the default node ID config isn't found.
+    /// This is helpful for users who may have renamed their node or are running a non-default setup.
+    ///
+    /// Returns the path to the first valid nym-node config.toml found, or None if no configs exist.
     fn find_any_node_config() -> Option<PathBuf> {
         let nym_nodes_dir = must_get_home()
             .join(NYM_DIR)
@@ -119,7 +125,7 @@ impl ConfigArgs {
             return None;
         }
 
-        // Try to find any nym-node config
+        // Try to find any nym-node config by scanning the nym-nodes directory
         if let Ok(entries) = std::fs::read_dir(&nym_nodes_dir) {
             for entry in entries.flatten() {
                 let config_path = entry
@@ -255,6 +261,15 @@ struct ConfigRun {
 }
 
 impl ConfigRun {
+    /// Adapts bridge and node configurations based on detected or configured values.
+    ///
+    /// This function coordinates the bridge configuration generation process by:
+    /// 1. Generating cryptographic keys if requested
+    /// 2. Detecting or using configured public IP addresses
+    /// 3. Setting the forward address to the local wireguard listener
+    /// 4. Generating client connection parameters
+    ///
+    /// Returns the adapted configurations for bridge, node, and client.
     fn adapt_configs(&self) -> Result<ConfigsOut> {
         info!("adapting configs");
         // adapt the nym-node configuration
@@ -285,10 +300,20 @@ impl ConfigRun {
                             info!("using public IPs from nym-node config: {:?}", node_ips);
                             bridge_cfg.set_public_ips(node_ips);
                         } else {
-                            warn!("no public IPs available");
+                            warn!(
+                                "no public IPs available - bridge may not be reachable from external clients"
+                            );
+                            warn!(
+                                "hint: check internet connectivity or manually configure public IPs in bridge config or nym-node config"
+                            );
                         }
                     } else {
-                        warn!("could not determine public IPs");
+                        warn!(
+                            "could not determine public IPs - bridge may not be reachable from external clients"
+                        );
+                        warn!(
+                            "hint: ensure internet connectivity or manually set public_ips in /etc/nym/bridges.toml"
+                        );
                     }
                 }
             }

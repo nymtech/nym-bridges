@@ -52,7 +52,32 @@ Options:
   -h, --help                          Print help (see more with '--help')
 ```
 
-### Example
+### Security Best Practices
+
+After generating your bridge configuration, protect sensitive files:
+
+```sh
+# Restrict config file permissions (recommended)
+chmod 600 /etc/nym/bridges.toml
+
+# Protect keys directory
+chmod 700 /etc/nym/keys
+chmod 600 /etc/nym/keys/*
+
+# If running as a service, ensure files are owned by the service user
+chown nym:nym /etc/nym/bridges.toml
+chown -R nym:nym /etc/nym/keys
+```
+
+**Security Notes:**
+- Config files contain cryptographic keys and should never be shared
+- Keep backups of keys in a secure location
+- Never commit config files or keys to version control
+- If keys are compromised, regenerate them using `bridge-cfg --gen --allow-overwrite`
+
+### Examples
+
+#### Initial Configuration
 
 We can run a dry run on a test `nym-node` configuration to generate a compatible configuration
 that can be used for the [`nym-bridge`](../nym-bridge/) runner.
@@ -102,6 +127,27 @@ This will result in the following output:
 + private_ed25519_identity_key_file = "bridge-cfg/test/keys/ed25519_bridge_identity.pem"
 ...
 ```
+
+#### Refreshing IP Configuration
+
+If your server's public IP addresses change after the initial configuration (e.g., network reconfiguration, ISP changes), you can refresh the configuration while preserving existing keys:
+
+```sh
+# Re-detect public IPs and update existing config (preserves keys)
+bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml
+
+# Preview changes with dry-run first
+bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml --dry-run
+
+# After updating, restart the bridge service
+sudo systemctl restart nym-bridge
+```
+
+This is useful when:
+- Your server's public IP changes
+- You add or remove IPv6 connectivity
+- You migrate to a different network environment
+- You need to update the configuration without regenerating keys
 
 ## Future Work
 

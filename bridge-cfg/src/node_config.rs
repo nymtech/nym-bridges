@@ -79,6 +79,9 @@ impl NodeConfig {
             NodeConfigInner::Default => match get_public_ip_addrs() {
                 Ok(public_ips) => {
                     if public_ips.is_empty() {
+                        warn!(
+                            "no public IPs detected; check your internet connectivity or manually configure public_ips in nym-node config"
+                        );
                         None
                     } else {
                         Some(public_ips)
@@ -86,6 +89,9 @@ impl NodeConfig {
                 }
                 Err(e) => {
                     error!("failed to get public IPs: {e}");
+                    error!(
+                        "hint: check internet connectivity or manually set 'host.public_ips' in your nym-node config at $HOME/.nym/nym-nodes/{{NODE_ID}}/config/config.toml"
+                    );
                     None
                 }
             },
@@ -329,6 +335,14 @@ bridge_client_params = '/etc/nym/client_bridge_params.json'
     }
 }
 
+/// Detects public IP addresses by querying external services.
+///
+/// This function attempts to detect both IPv4 and IPv6 addresses for the current host
+/// by making HTTP requests to ipify.org services. IPv4 detection failure is treated as
+/// an error, while IPv6 detection failure is expected in many environments and logged
+/// as a debug message.
+///
+/// Returns a Vec of detected IP addresses (may contain 0, 1, or 2 addresses).
 pub fn get_public_ip_addrs() -> Result<Vec<IpAddr>> {
     info!("attempting to fetch public IPs from api.ipify.org");
     let mut ips = Vec::new();
