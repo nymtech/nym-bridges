@@ -26,7 +26,35 @@ create_first_time_configuration() {
         chmod 700 "${BRIDGES_CONF_DIR}keys"
         
         # generate a config file using the default filesystem locations
-        bridge-cfg --gen
+        echo "Generating bridge configuration..."
+        if ! bridge-cfg --gen 2>&1; then
+            echo ""
+            echo "================================================================"
+            echo "WARNING: Bridge configuration generation failed"
+            echo "================================================================"
+            echo ""
+            echo "Possible reasons:"
+            echo "  1. Multiple nym-node configurations detected"
+            echo "  2. No nym-node configuration found"
+            echo "  3. Public IP detection failed"
+            echo ""
+            echo "To resolve this, run bridge-cfg manually:"
+            echo ""
+            echo "If you have multiple nym-node configs, specify which one:"
+            echo "  bridge-cfg --id <node-id> --gen"
+            echo ""
+            echo "Or specify the config path directly:"
+            echo "  bridge-cfg --node-config /path/to/nym-node/config.toml --gen"
+            echo ""
+            echo "Example:"
+            echo "  bridge-cfg --id my-node-name --gen"
+            echo ""
+            echo "After running bridge-cfg successfully:"
+            echo "  systemctl enable nym-bridge"
+            echo "  systemctl start nym-bridge"
+            echo "================================================================"
+            return 0
+        fi
 
         # Ensure that the config file has the correct ownership
         chown ${BRIDGES_USER}:${BRIDGES_USER} ${BRIDGES_CONF}
@@ -35,7 +63,11 @@ create_first_time_configuration() {
         # Mode 640 allows read/write for owner (nym), read for group (nym), and no access for others
         chmod ${BRIDGES_CONF_PERMS} ${BRIDGES_CONF}
         
+        echo ""
         echo "================================================================"
+        echo "SUCCESS: Bridge configuration created"
+        echo "================================================================"
+        echo ""
         echo "SECURITY NOTICE:"
         echo "Config file created at: ${BRIDGES_CONF}"
         echo "Permissions set to ${BRIDGES_CONF_PERMS} (owner: ${BRIDGES_USER})"
@@ -43,6 +75,10 @@ create_first_time_configuration() {
         echo ""
         echo "To further restrict access, consider:"
         echo "  chmod 600 ${BRIDGES_CONF}"
+        echo ""
+        echo "To start the bridge:"
+        echo "  systemctl enable nym-bridge"
+        echo "  systemctl start nym-bridge"
         echo "================================================================"
     fi
 }

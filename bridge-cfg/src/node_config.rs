@@ -66,7 +66,12 @@ impl NodeConfig {
         let public_ips = self.public_ips();
         debug!("found public IPs: {public_ips:?}");
         let address = if let Some(ips) = public_ips {
-            ips[0]
+            if ips.is_empty() {
+                warn!("public_ips array is empty in node config, falling back to localhost");
+                IpAddr::V4(Ipv4Addr::LOCALHOST)
+            } else {
+                ips[0]
+            }
         } else {
             IpAddr::V4(Ipv4Addr::LOCALHOST)
         };
@@ -99,11 +104,12 @@ impl NodeConfig {
                 if let Some(host) = inner.get("host") {
                     host.get("public_ips")
                         .and_then(|v| v.as_array())
-                        .map(|public_ips| {
-                            public_ips
+                        .and_then(|public_ips| {
+                            let ips: Vec<IpAddr> = public_ips
                                 .iter()
                                 .filter_map(|s| s.as_str().and_then(|s| s.parse::<IpAddr>().ok()))
-                                .collect()
+                                .collect();
+                            if ips.is_empty() { None } else { Some(ips) }
                         })
                 } else {
                     None

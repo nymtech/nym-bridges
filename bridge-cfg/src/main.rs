@@ -115,17 +115,19 @@ impl ConfigArgs {
     /// when the user hasn't specified a config path and the default node ID config isn't found.
     /// This is helpful for users who may have renamed their node or are running a non-default setup.
     ///
-    /// Returns the path to the first valid nym-node config.toml found, or None if no configs exist.
-    fn find_any_node_config() -> Option<PathBuf> {
+    /// Returns the path to the valid nym-node config.toml found, or None if no configs exist.
+    /// Returns an error if multiple configs are found (ambiguous case).
+    fn find_any_node_config() -> Result<Option<PathBuf>> {
         let nym_nodes_dir = must_get_home()
             .join(NYM_DIR)
             .join(Self::DEFAULT_NYMNODES_DIR);
 
         if !nym_nodes_dir.exists() {
-            return None;
+            return Ok(None);
         }
 
         // Try to find any nym-node config by scanning the nym-nodes directory
+        let mut found_configs = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&nym_nodes_dir) {
             for entry in entries.flatten() {
                 let config_path = entry
@@ -133,24 +135,51 @@ impl ConfigArgs {
                     .join(DEFAULT_CONFIG_DIR)
                     .join(DEFAULT_CONFIG_FILENAME);
                 if config_path.exists() {
-                    info!("found nym-node config at: {}", config_path.display());
-                    return Some(config_path);
+                    found_configs.push(config_path);
                 }
             }
         }
-        None
+
+        match found_configs.len() {
+            0 => Ok(None),
+            1 => {
+                info!("found nym-node config at: {}", found_configs[0].display());
+                Ok(Some(found_configs[0].clone()))
+            }
+            _ => {
+                error!(
+                    "found multiple nym-node configs in {}:",
+                    nym_nodes_dir.display()
+                );
+                for config in &found_configs {
+                    error!("  - {}", config.display());
+                }
+                anyhow::bail!(
+                    "Multiple nym-node configurations found. Please specify which one to use with --id <node-id> or --node-config <path>.\n\
+                    Found configs:\n{}\n\
+                    Example: bridge-cfg --id <node-id>",
+                    found_configs
+                        .iter()
+                        .map(|p| format!("  {}", p.display()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            }
+        }
     }
 
     fn adapt_config_files(&self) -> Result<()> {
-        let node_cfg_path = self.node_config.clone().unwrap_or_else(|| {
+        let node_cfg_path = if let Some(path) = &self.node_config {
+            path.clone()
+        } else {
             let default_path = Self::default_node_config_path(&self.id);
             if default_path.exists() {
                 default_path
             } else {
                 // Try to find any nym-node config
-                Self::find_any_node_config().unwrap_or(default_path)
+                Self::find_any_node_config()?.unwrap_or(default_path)
             }
-        });
+        };
 
         // try to parse the bridge config or get a default and keep a copy unmodified for diff
         let bridge_cfg_orig = match &self.bridge_config_path_in {
