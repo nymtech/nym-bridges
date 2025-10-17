@@ -6,10 +6,10 @@
 
 ```sh
 # Download the package
-wget https://github.com/nymtech/nym-bridges/releases/download/bridge-binaries-v0.1.0/nym-bridge_0.1.0-1_amd64.deb
+wget https://github.com/nymtech/nym-bridges/releases/download/bridge-binaries-v0.1.2/nym-bridge_0.1.0-2_amd64.deb
 
 # Install the package
-sudo dpkg -i nym-bridge_0.1.0-1_amd64.deb
+sudo dpkg -i nym-bridge_0.1.0-2_amd64.deb
 sudo apt-get install -f
 
 # Start service
