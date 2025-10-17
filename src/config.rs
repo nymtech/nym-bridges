@@ -146,7 +146,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
                     transports.push(ClientConfig::QuicPlain(quic::ClientOptions {
                         addresses,
-                        host: None,
+                        host: Some("netdna.bootstrapcdn.com".to_string()),
                         id_pubkey,
                     }));
                 }
@@ -156,14 +156,14 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
                     transports.push(ClientConfig::TlsPlain(tls::ClientOptions {
                         addresses,
-                        host: None,
+                        host: Some("netdna.bootstrapcdn.com".to_string()),
                         id_pubkey,
                     }));
                 }
             }
         }
         Ok(Self {
-            version: "0.0.0".into(),
+            version: "0".into(),
             transports,
         })
     }
@@ -288,7 +288,7 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
                 "192.168.0.1:4433".parse().unwrap(),
                 "[fe80::1]:4433".parse().unwrap(),
             ],
-            host: None,
+            host: Some("netdna.bootstrapcdn.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
         let expected_tls = tls::ClientOptions {
@@ -296,7 +296,7 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
                 "192.168.0.1:4443".parse().unwrap(),
                 "[fe80::1]:4443".parse().unwrap(),
             ],
-            host: None,
+            host: Some("netdna.bootstrapcdn.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
 

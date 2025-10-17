@@ -56,6 +56,24 @@ bridge-cfg --gen --dry-run
 bridge-cfg --gen
 ```
 
+**Security Note:** After generating your bridge configuration, ensure proper file permissions to protect sensitive key material:
+
+```sh
+# Restrict config file to owner only (recommended for production)
+sudo chmod 600 /etc/nym/bridges.toml
+
+# Protect keys directory
+sudo chmod 700 /etc/nym/keys
+sudo chmod 600 /etc/nym/keys/*
+```
+
+**Refreshing Configuration:** If your server's public IPs change after initial setup, you can refresh the configuration:
+
+```sh
+# Re-detect public IPs while preserving existing keys
+bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml
+```
+
 Manual configuration instructions can be found in [`nym-bridge/README.md`](./nym-bridge/README.md)
 
 #### Usage

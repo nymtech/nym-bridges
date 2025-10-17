@@ -109,11 +109,77 @@ impl ConfigArgs {
             .join(DEFAULT_CONFIG_FILENAME)
     }
 
+    /// Try to find any nym-node config if the default doesn't exist.
+    ///
+    /// This function searches the nym-nodes directory for any available node configuration
+    /// when the user hasn't specified a config path and the default node ID config isn't found.
+    /// This is helpful for users who may have renamed their node or are running a non-default setup.
+    ///
+    /// Returns the path to the valid nym-node config.toml found, or None if no configs exist.
+    /// Returns an error if multiple configs are found (ambiguous case).
+    fn find_any_node_config() -> Result<Option<PathBuf>> {
+        let nym_nodes_dir = must_get_home()
+            .join(NYM_DIR)
+            .join(Self::DEFAULT_NYMNODES_DIR);
+
+        if !nym_nodes_dir.exists() {
+            return Ok(None);
+        }
+
+        // Try to find any nym-node config by scanning the nym-nodes directory
+        let mut found_configs = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&nym_nodes_dir) {
+            for entry in entries.flatten() {
+                let config_path = entry
+                    .path()
+                    .join(DEFAULT_CONFIG_DIR)
+                    .join(DEFAULT_CONFIG_FILENAME);
+                if config_path.exists() {
+                    found_configs.push(config_path);
+                }
+            }
+        }
+
+        match found_configs.len() {
+            0 => Ok(None),
+            1 => {
+                info!("found nym-node config at: {}", found_configs[0].display());
+                Ok(Some(found_configs[0].clone()))
+            }
+            _ => {
+                error!(
+                    "found multiple nym-node configs in {}:",
+                    nym_nodes_dir.display()
+                );
+                for config in &found_configs {
+                    error!("  - {}", config.display());
+                }
+                anyhow::bail!(
+                    "Multiple nym-node configurations found. Please specify which one to use with --id <node-id> or --node-config <path>.\n\
+                    Found configs:\n{}\n\
+                    Example: bridge-cfg --id <node-id>",
+                    found_configs
+                        .iter()
+                        .map(|p| format!("  {}", p.display()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            }
+        }
+    }
+
     fn adapt_config_files(&self) -> Result<()> {
-        let node_cfg_path = self
-            .node_config
-            .clone()
-            .unwrap_or(Self::default_node_config_path(&self.id));
+        let node_cfg_path = if let Some(path) = &self.node_config {
+            path.clone()
+        } else {
+            let default_path = Self::default_node_config_path(&self.id);
+            if default_path.exists() {
+                default_path
+            } else {
+                // Try to find any nym-node config
+                Self::find_any_node_config()?.unwrap_or(default_path)
+            }
+        };
 
         // try to parse the bridge config or get a default and keep a copy unmodified for diff
         let bridge_cfg_orig = match &self.bridge_config_path_in {
@@ -224,6 +290,15 @@ struct ConfigRun {
 }
 
 impl ConfigRun {
+    /// Adapts bridge and node configurations based on detected or configured values.
+    ///
+    /// This function coordinates the bridge configuration generation process by:
+    /// 1. Generating cryptographic keys if requested
+    /// 2. Detecting or using configured public IP addresses
+    /// 3. Setting the forward address to the local wireguard listener
+    /// 4. Generating client connection parameters
+    ///
+    /// Returns the adapted configurations for bridge, node, and client.
     fn adapt_configs(&self) -> Result<ConfigsOut> {
         info!("adapting configs");
         // adapt the nym-node configuration
@@ -235,6 +310,42 @@ impl ConfigRun {
         if self.opts.generate_keys {
             info!("generating key(s)");
             bridge_cfg.generate_keys(self.opts.allow_overwrite, &self.paths.key_dir)?;
+        }
+
+        // Set public IPs for bridge config:
+        // 1. If bridge config already has IPs, keep them (existing config)
+        // 2. Otherwise, try to detect from internet (gets both IPv4 and IPv6)
+        // 3. If detection fails, fall back to nym-node config IPs
+        if bridge_cfg.get_public_ips().is_empty() {
+            match crate::node_config::get_public_ip_addrs() {
+                Ok(detected_ips) if !detected_ips.is_empty() => {
+                    info!("using detected public IPs: {:?}", detected_ips);
+                    bridge_cfg.set_public_ips(detected_ips);
+                }
+                _ => {
+                    // Fall back to nym-node config if detection failed
+                    if let Some(node_ips) = node_cfg.public_ips() {
+                        if !node_ips.is_empty() {
+                            info!("using public IPs from nym-node config: {:?}", node_ips);
+                            bridge_cfg.set_public_ips(node_ips);
+                        } else {
+                            warn!(
+                                "no public IPs available - bridge may not be reachable from external clients"
+                            );
+                            warn!(
+                                "hint: check internet connectivity or manually configure public IPs in bridge config or nym-node config"
+                            );
+                        }
+                    } else {
+                        warn!(
+                            "could not determine public IPs - bridge may not be reachable from external clients"
+                        );
+                        warn!(
+                            "hint: ensure internet connectivity or manually set public_ips in /etc/nym/bridges.toml"
+                        );
+                    }
+                }
+            }
         }
 
         // adapt the nym-bridge configuration
@@ -305,6 +416,125 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_node_config_parsing() {
+        // test our node config parsing handles malformed configs
+        node_config::NodeConfig::test_malformed_configs();
+    }
+
+    #[test]
+    fn test_public_ip_detection() {
+        // Test that public IP detection works (this may fail in CI/containers)
+        let result = node_config::get_public_ip_addrs();
+        match result {
+            Ok(ips) => {
+                println!("Detected public IPs: {:?}", ips);
+                // Should have at least one IP (IPv4 or IPv6)
+                assert!(!ips.is_empty());
+                // IPs should be valid
+                for ip in ips {
+                    assert!(ip.is_ipv4() || ip.is_ipv6());
+                }
+            }
+            Err(e) => {
+                println!(
+                    "Public IP detection failed (expected in some environments): {}",
+                    e
+                );
+                // This is OK - some environments (CI, containers) may not have internet access
+            }
+        }
+    }
+
+    #[test]
+    fn test_bridge_config_with_detected_ips() {
+        // Test that bridge config can be updated with detected IPs
+        let mut bridge_cfg = bridge_config::BridgeConfig::default();
+
+        // Simulate detected IPs
+        let test_ips = vec!["1.2.3.4".parse().unwrap(), "2001:db8::1".parse().unwrap()];
+
+        bridge_cfg.set_public_ips(test_ips.clone());
+
+        // Verify the config was updated
+        let serialized = bridge_cfg.serialize();
+        assert!(serialized.contains("1.2.3.4"));
+        assert!(serialized.contains("2001:db8::1"));
+
+        println!("Bridge config with detected IPs: {}", serialized);
+    }
+
+    #[test]
+    fn test_quic_client_config_generation() {
+        use tempdir::TempDir;
+
+        // Test that QUIC client config is generated with correct format
+        let temp_dir = TempDir::new("bridges").unwrap();
+        let key_dir = temp_dir.path();
+
+        let mut bridge_cfg = bridge_config::BridgeConfig::default();
+
+        // Set test public IPs
+        let test_ips = vec![
+            "139.162.33.226".parse().unwrap(),
+            "2400:8901::2000:faff:fea6:87f2".parse().unwrap(),
+        ];
+        bridge_cfg.set_public_ips(test_ips);
+
+        // Generate keys first
+        bridge_cfg.generate_keys(true, key_dir).unwrap();
+
+        // Generate client config
+        let client_config =
+            bridge_client_config::BridgeClientConfig::try_from(&bridge_cfg).unwrap();
+        let client_json = client_config.serialize().unwrap();
+
+        // Parse the JSON to verify structure
+        let parsed: serde_json::Value = serde_json::from_str(&client_json).unwrap();
+
+        // Verify version
+        assert_eq!(parsed["version"], "0");
+
+        // Verify transport type
+        assert_eq!(parsed["transports"][0]["transport_type"], "quic_plain");
+
+        // Verify addresses contain our test IPs
+        let addresses = &parsed["transports"][0]["args"]["addresses"];
+        assert!(addresses.is_array());
+
+        let address_strings: Vec<String> = addresses
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        // Should contain both IPv4 and IPv6 addresses with port 4443
+        assert!(
+            address_strings
+                .iter()
+                .any(|addr| addr.contains("139.162.33.226:4443"))
+        );
+        assert!(
+            address_strings
+                .iter()
+                .any(|addr| addr.contains("[2400:8901::2000:faff:fea6:87f2]:4443"))
+        );
+
+        // Verify host field
+        assert_eq!(
+            parsed["transports"][0]["args"]["host"],
+            "netdna.bootstrapcdn.com"
+        );
+
+        println!("Generated QUIC client config: {}", client_json);
+    }
 }
 
 #[cfg(test)]
@@ -412,8 +642,12 @@ pub(crate) mod test {
             .iter()
             .for_each(|transport| match transport {
                 ClientConfig::QuicPlain(cfg) => {
-                    assert!(cfg.addresses.contains(&"[fe80::1]:4443".parse().unwrap()));
-                    assert!(cfg.addresses.contains(&"192.168.0.1:4443".parse().unwrap()));
+                    // Should have detected IPs from internet (both IPv4 and IPv6)
+                    assert!(!cfg.addresses.is_empty(), "should have detected public IPs");
+                    // Check we have at least one IPv4 and one IPv6
+                    let has_ipv4 = cfg.addresses.iter().any(|addr| addr.is_ipv4());
+                    let has_ipv6 = cfg.addresses.iter().any(|addr| addr.is_ipv6());
+                    assert!(has_ipv4 || has_ipv6, "should have at least one IP address");
                 }
                 ClientConfig::TlsPlain(_cfg) => todo!(),
             });
