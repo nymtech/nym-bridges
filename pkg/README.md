@@ -9,17 +9,16 @@ Build Debian package for the `nym-bridge` as a service.
 
 # From repository root
 cargo deb
-```
 
 ### Check Build Artifacts
 
 
 # Check Debian best practices
-lintian target/debian/nym-bridge_0.1.0-1_amd64.deb
+lintian target/debian/nym-bridge_0.1.0-2_amd64.deb
 
 # Inspect package contents
 mkdir debdir
-dpkg-deb -R target/debian/nym-bridge_0.1.0-1_amd64.deb debdir
+dpkg-deb -R target/debian/nym-bridge_0.1.0-2_amd64.deb debdir
 tree debdir
 ```
 
