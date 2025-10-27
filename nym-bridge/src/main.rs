@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use nym_bin_common::bin_info;
 use tokio::net::TcpStream;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::{net::SocketAddr, path::PathBuf};
 
 use nym_bridges::{
@@ -16,7 +17,7 @@ use nym_bridges::{
 };
 
 #[derive(Debug, Parser, PartialEq)]
-#[clap(name = "args")]
+#[command(author="Nymtech", version, long_version = pretty_build_info_static())]
 struct Args {
     #[clap(
         short = 'c',
@@ -26,6 +27,12 @@ struct Args {
     /// Specify the path to the config file to load. If no file path is provided, a default path
     /// will be assumed.
     config_path: PathBuf,
+}
+
+static PRETTY_BUILD_INFORMATION: OnceLock<String> = OnceLock::new();
+// Helper for passing LONG_VERSION to clap
+fn pretty_build_info_static() -> &'static str {
+    PRETTY_BUILD_INFORMATION.get_or_init(|| bin_info!().pretty_print())
 }
 
 #[tokio::main]
