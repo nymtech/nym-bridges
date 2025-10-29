@@ -29,10 +29,12 @@
 
 use anyhow::Result;
 use clap::Parser;
+use nym_bin_common::bin_info;
 use nym_config::{DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_FILENAME, NYM_DIR, must_get_home};
 use tracing::*;
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 mod bridge_client_config;
 use bridge_client_config::BridgeClientConfig;
@@ -41,8 +43,14 @@ use bridge_config::BridgeConfig;
 mod node_config;
 use node_config::NodeConfig;
 
+static PRETTY_BUILD_INFORMATION: OnceLock<String> = OnceLock::new();
+// Helper for passing LONG_VERSION to clap
+fn pretty_build_info_static() -> &'static str {
+    PRETTY_BUILD_INFORMATION.get_or_init(|| bin_info!().pretty_print())
+}
+
 #[derive(Debug, Parser, PartialEq)]
-#[clap(name = "config-args")]
+#[command(author="Nymtech", version, long_version = pretty_build_info_static())]
 struct ConfigArgs {
     #[clap(short, long, conflicts_with = "id")]
     /// Provide a path to the `nym-node` configuration that will be used to populate the node
