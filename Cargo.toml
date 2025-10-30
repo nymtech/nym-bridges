@@ -53,6 +53,8 @@ uuid = "1.17"
 x509-parser = { version = "0.17.0", features = ["verify"] }
 webpki-roots = "0.26"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }
 
 # ------------------------------------------------------------------------------
 # START DEBIAN PACKAGING
