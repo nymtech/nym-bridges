@@ -1,0 +1,37 @@
+name: Code Coverage
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  code-coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources 
+        uses: actions/checkout@v1
+
+      - name: Install Rust toolchain 
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          components: llvm-tools-preview
+          override: true
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate code coverage
+        id: coverage
+        run: cargo llvm-cov --all-features -p nym-bridges -p bridge-cfg --no-fail-fast --lcov --output-path lcov.info
+        env:
+          NODE_COVERALLS_DEBUG: true
+
+      - name: Coveralls upload
+        uses: coverallsapp/github-action@master
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: lcov.info
+          debug: true

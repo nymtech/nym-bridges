@@ -10,6 +10,7 @@
 <p>
   <a href="https://github.com/nymtech/nym-bridges/actions/workflows/rust.yml">
     <img src="https://github.com/nymtech/nym-bridges/actions/workflows/rust.yml/badge.svg?branch=main" alt="Build Status"></a>
+  <a href='https://coveralls.io/github/nymtech/nym-bridges?branch=main'><img src='https://coveralls.io/repos/github/nymtech/nym-bridges/badge.svg?branch=main' alt='Coverage Status' /></a>
 </p>
 
 This repository implements and provides tooling for a pluggable transport system used to secure and
