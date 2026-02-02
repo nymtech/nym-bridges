@@ -59,7 +59,7 @@ jobs:
       #   run: lintian target/debian/nym-bridge*.deb
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nym-bridge-artifacts
           path: |
