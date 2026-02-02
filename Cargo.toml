@@ -31,7 +31,7 @@ pem = "3.0.5"
 pin-project-lite = "0.2"
 quinn = {version = "0.11", default-features = false, features = ["ring", "rustls", "runtime-tokio"] }
 quinn-proto = {version = "0.11", default-features = false, features = ["rustls"] }
-rand = "0.8"
+rand = "0.9"
 rcgen = "0.14"
 ring = "0.17"
 rustc-hash = "2"
