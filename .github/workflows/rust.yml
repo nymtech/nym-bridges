@@ -17,7 +17,7 @@ jobs:
     name: Verify code Fromatting
     runs-on: "ubuntu-latest"
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Format
       run: cargo fmt --all -- --check
 
@@ -31,7 +31,7 @@ jobs:
       RUSTFLAGS: -Dwarnings
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@nightly
@@ -61,7 +61,7 @@ jobs:
               echo "deb [arch=i386] http://ports.ubuntu.com/ focal universe\ndeb [arch=i386] http://ports.ubuntu.com/ focal-updates universe\n" | sudo tee -a /etc/apt/sources.list.d/i386-cross-compile-sources.list;
               sudo apt update && sudo apt install gcc-multilib libsqlite3-dev:i386
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - uses: dtolnay/rust-toolchain@stable
     - run: rustup target add ${{ matrix.target }}
     - run: ${{ matrix.deps }}
@@ -73,7 +73,7 @@ jobs:
     name: Test Nightly
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - uses: dtolnay/rust-toolchain@nightly
     - run: cargo test --workspace --all-targets
 
@@ -88,7 +88,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@nightly
