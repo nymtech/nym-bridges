@@ -5,21 +5,35 @@ edition = "2024"
 
 [dependencies]
 
-anyhow = "1.0.22"
-clap = { version = "4", features = ["derive", "string"] }
-ed25519-dalek = { version = "2.2", features = ["pkcs8", "alloc", "pem", "rand_core"]}
-nym-bin-common = {git = "https://github.com/nymtech/nym.git"}
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive", "string"] }
+ed25519-dalek = { version = "2.2", features = [
+	"pkcs8",
+	"alloc",
+	"pem",
+	"rand_core",
+] }
 rand = "0.8"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-similar = "2.7"
-tracing = { version = "0.1.10", default-features = false, features = ["std"] }
-tracing-subscriber = { version = "0.3.0", default-features = false, features = ["env-filter", "fmt", "ansi", "time", "local-time"] }
-toml = "0.9"
-toml_edit = "0.23.3"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+similar.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, default-features = false, features = [
+	"env-filter",
+	"fmt",
+	"ansi",
+	"time",
+	"local-time",
+] }
+toml_edit.workspace = true
+tempdir.workspace = true
+reqwest = { version = "0.12", default-features = false, features = [
+	"json",
+	"blocking",
+	"rustls-tls",
+] }
 
-nym-bridges = {path = "../"}
+nym-bridges = { path = "../" }
 nym-config = { git = "https://github.com/nymtech/nym.git" }
-
-tempdir = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+nym-bin-common = { git = "https://github.com/nymtech/nym.git" }

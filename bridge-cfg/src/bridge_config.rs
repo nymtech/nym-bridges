@@ -76,7 +76,7 @@ impl BridgeConfig {
     /// material rather than trying to do it for them.
     pub fn generate_keys(&mut self, overwrite: bool, dir: &Path) -> Result<()> {
         debug!("generating keys overwrite:{overwrite}, dir: {dir:?}");
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::thread_rng();
         let new_key = SigningKey::generate(&mut rng);
         let key = new_key
             .to_pkcs8_pem(LineEnding::CRLF)
