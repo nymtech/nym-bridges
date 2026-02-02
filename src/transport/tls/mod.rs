@@ -6,6 +6,7 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{SigningKey, VerifyingKey};
+use pkcs8::der::pem_rfc7468::PemLabel;
 use rustls::pki_types::ServerName;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
@@ -52,7 +53,7 @@ impl ServerConfig {
         if let Some(ref base64_key) = self.identity_key {
             ServerConfigSource::from_identity_base64(base64_key)
         } else if let Some(ref key_path) = self.private_ed25519_identity_key_file {
-            let signing_key = SigningKey::read_pkcs8_pem_file(key_path)
+            let signing_key = read_pkcs8_pem_file(key_path)
                 .map_err(|e| anyhow!("failed to parse identity key in {key_path:?}: {e}"))?;
             Ok(ServerConfigSource::from_identity(signing_key.to_bytes()))
         } else {
@@ -70,6 +71,12 @@ impl ServerConfig {
         let public_id = crypto_source.public_identity();
         Ok(BASE64_STANDARD.encode(&public_id[..]))
     }
+}
+
+fn read_pkcs8_pem_file(path: impl AsRef<std::path::Path>) -> Result<SigningKey> {
+    let (label, doc) = pkcs8::SecretDocument::read_pem_file(path)?;
+    pkcs8::PrivateKeyInfo::validate_pem_label(&label)?;
+    SigningKey::from_pkcs8_der(doc.as_bytes()).context("failed to parse pem file")
 }
 
 pub fn create_listener(options: &ServerConfig) -> Result<TlsAcceptor> {
