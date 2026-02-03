@@ -15,11 +15,11 @@ name = "nym_bridges"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1.0.22"
+anyhow = "1.0.100"
 base64 = "0.22.1"
 bs58 = "0.5.1"
 bytes = "1"
-ed25519-dalek = { version = "2.2", features = ["pkcs8", "alloc", "pem", "rand_core"]}
+ed25519-dalek = { version = "3.0", features = ["pkcs8", "alloc", "pem", "rand_core"]}
 futures = "0.3.31"
 getrandom = { version = "0.3", default-features = false }
 hex = "0.4.3"

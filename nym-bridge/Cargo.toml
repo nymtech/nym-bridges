@@ -4,12 +4,12 @@ version = "0.1.2"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.22"
+anyhow = "1.0.100"
 base64 = "0.22.1"
 bs58 = "0.5.1"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
-ed25519-dalek = { version = "3.0.0-pre.0", features = ["pkcs8", "alloc", "pem", "rand_core"]}
+ed25519-dalek = { version = "3.0.0-pre.5", features = ["pkcs8", "alloc", "pem", "rand_core"]}
 getrandom = { version = "0.3", default-features = false }
 lru-slab = "0.1.2"
 lazy_static = "1"

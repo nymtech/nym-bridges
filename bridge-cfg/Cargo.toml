@@ -5,9 +5,9 @@ edition = "2024"
 
 [dependencies]
 
-anyhow = "1.0.22"
+anyhow = "1.0.100"
 clap = { version = "4", features = ["derive", "string"] }
-ed25519-dalek = { version = "2.2", features = ["pkcs8", "alloc", "pem", "rand_core"]}
+ed25519-dalek = { version = "3.0", features = ["pkcs8", "alloc", "pem", "rand_core"]}
 nym-bin-common = {git = "https://github.com/nymtech/nym.git"}
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
