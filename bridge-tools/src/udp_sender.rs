@@ -9,7 +9,7 @@
 use std::{collections::VecDeque, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use clap::Parser;
-use rand::{Rng, SeedableRng};
+use rand::prelude::*;
 use rand_chacha::ChaCha20Rng;
 use tokio::{
     net::UdpSocket,
