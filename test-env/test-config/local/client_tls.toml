@@ -10,4 +10,5 @@ transport_type = "tls_plain"
 [transports.transport.args]
 address = "[::1]:4443"
 host = "tls-test.domain.com"
+sni_override = "example.com"
 id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="

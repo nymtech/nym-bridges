@@ -1,5 +1,6 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use base64::prelude::*;
@@ -11,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use tracing::*;
 
 use crate::transport::tls::certs::{IdentityBasedVerifier, ServerConfigSource};
+
+pub use super::ClientOptions;
 
 #[allow(unused)]
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
@@ -88,22 +91,6 @@ pub fn create_endpoint(options: &ServerConfig) -> Result<quinn::Endpoint> {
 
 // ====================================[ Client Side ]====================================
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct ClientOptions {
-    /// Address describing the remote transport server. This is a vec to support multiple addresses
-    /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
-    /// as the key material should not be used across multiple instances.
-    ///
-    /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
-    pub addresses: Vec<SocketAddr>,
-
-    /// Override hostname used for certificate verification
-    pub host: Option<String>,
-
-    /// Use identity public key to verify server self signed certificate
-    pub id_pubkey: String,
-}
-
 const DEFAULT_CLIENT_BIND_ADDR: &str = "[::]:0";
 
 pub async fn transport_conn(options: &ClientOptions) -> Result<quinn::Connection> {
@@ -111,7 +98,8 @@ pub async fn transport_conn(options: &ClientOptions) -> Result<quinn::Connection
     let mut bytes = [0u8; ed25519_dalek::PUBLIC_KEY_LENGTH];
     BASE64_STANDARD.decode_slice(&options.id_pubkey, &mut bytes)?;
     let verif_key = VerifyingKey::from_bytes(&bytes)?;
-    let alt_names = options.host.clone().map(|h| vec![h]);
+
+    let alt_names = options.alt_names_for_verification();
     let verifier = IdentityBasedVerifier::new_with_alt_names(&verif_key, alt_names).unwrap();
 
     let mut client_crypto = rustls::ClientConfig::builder()
@@ -126,12 +114,13 @@ pub async fn transport_conn(options: &ClientOptions) -> Result<quinn::Connection
     let mut endpoint = quinn::Endpoint::client(DEFAULT_CLIENT_BIND_ADDR.parse().unwrap())?;
     endpoint.set_default_client_config(client_config);
 
-    // If no hostname is provided use the IP address of the remote server as the hostname.
-    let addr_host = options.addresses[0].ip().to_string();
-    let host = options.host.as_deref().unwrap_or(&addr_host);
+    let sni = options.effective_sni();
+    if options.sni_override.is_some() {
+        info!("using SNI override: {}", sni);
+    }
 
     endpoint
-        .connect(options.addresses[0], host)?
+        .connect(options.addresses[0], &sni)?
         .await
         .map_err(|e| anyhow!("failed to connect: {}", e))
 }

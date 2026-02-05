@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::transport::{quic, tls};
+use crate::transport::{ClientOptions, quic, tls};
 
 // ====================================[ Server Side ]====================================
 
@@ -73,24 +73,17 @@ impl PersistedServerConfig {
 
 // ====================================[ Client Side ]====================================
 
+/// Client transport configuration.
+///
+/// The variant determines which transport protocol to use (QUIC or TLS over TCP).
+/// Both variants use the same `ClientOptions` struct since the client-side configuration
+/// is identical for both protocols.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(tag = "transport_type", content = "args")]
 #[serde(rename_all = "snake_case")]
 pub enum ClientConfig {
-    QuicPlain(quic::ClientOptions),
-    TlsPlain(tls::ClientOptions),
-}
-
-impl From<quic::ClientOptions> for ClientConfig {
-    fn from(value: quic::ClientOptions) -> Self {
-        ClientConfig::QuicPlain(value)
-    }
-}
-
-impl From<tls::ClientOptions> for ClientConfig {
-    fn from(value: tls::ClientOptions) -> Self {
-        ClientConfig::TlsPlain(value)
-    }
+    QuicPlain(ClientOptions),
+    TlsPlain(ClientOptions),
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -144,9 +137,10 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let port = cfg.listen.port();
                     let addresses = ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect();
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
-                    transports.push(ClientConfig::QuicPlain(quic::ClientOptions {
+                    transports.push(ClientConfig::QuicPlain(ClientOptions {
                         addresses,
                         host: Some("netdna.bootstrapcdn.com".to_string()),
+                        sni_override: Some("example.com".to_string()),
                         id_pubkey,
                     }));
                 }
@@ -154,9 +148,10 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let port = cfg.listen.port();
                     let addresses = ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect();
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
-                    transports.push(ClientConfig::TlsPlain(tls::ClientOptions {
+                    transports.push(ClientConfig::TlsPlain(ClientOptions {
                         addresses,
                         host: Some("netdna.bootstrapcdn.com".to_string()),
+                        sni_override: Some("example.com".to_string()),
                         id_pubkey,
                     }));
                 }
@@ -231,20 +226,25 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
 
     #[test]
     fn serialize_and_deserialize_client_config() -> Result<()> {
-        let quic_cfg1 = quic::ClientOptions {
+        let quic_cfg1 = ClientOptions {
             addresses: vec!["192.168.100.3:443".parse().unwrap()],
             host: None,
+            sni_override: Some("example.com".into()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
-        let tls_cfg1 = tls::ClientOptions {
+        let tls_cfg1 = ClientOptions {
             addresses: vec!["123.45.67.89:443".parse().unwrap()],
             host: Some("alt.domain.com".into()),
+            sni_override: None,
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
 
         let cfg = PersistedClientConfig {
             version: "v0.0.0".into(),
-            transports: vec![quic_cfg1.into(), tls_cfg1.into()],
+            transports: vec![
+                ClientConfig::QuicPlain(quic_cfg1),
+                ClientConfig::TlsPlain(tls_cfg1),
+            ],
         };
 
         let serialized_cfg = toml::to_string(&cfg)?;
@@ -283,20 +283,22 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
 
         let client_config = PersistedClientConfig::try_from(&cfg)?;
 
-        let expected_quic = quic::ClientOptions {
+        let expected_quic = ClientOptions {
             addresses: vec![
                 "192.168.0.1:4433".parse().unwrap(),
                 "[fe80::1]:4433".parse().unwrap(),
             ],
             host: Some("netdna.bootstrapcdn.com".to_string()),
+            sni_override: Some("example.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
-        let expected_tls = tls::ClientOptions {
+        let expected_tls = ClientOptions {
             addresses: vec![
                 "192.168.0.1:4443".parse().unwrap(),
                 "[fe80::1]:4443".parse().unwrap(),
             ],
             host: Some("netdna.bootstrapcdn.com".to_string()),
+            sni_override: Some("example.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
 
@@ -306,6 +308,41 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
                 ClientConfig::TlsPlain(cc) => assert_eq!(cc, expected_tls),
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn backward_compatibility_old_config_without_sni_override() -> Result<()> {
+        // Old config format WITHOUT sni_override field - must still parse
+        // This ensures users upgrading from older versions don't break
+        let old_config = r#"
+version = "v0.0.0"
+
+[[transports]]
+transport_type = "quic_plain"
+
+[transports.args]
+addresses = ["192.168.100.3:443"]
+id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="
+"#;
+
+        let parsed = PersistedClientConfig::parse(old_config)?;
+
+        assert_eq!(parsed.version, "v0.0.0");
+        assert_eq!(parsed.transports.len(), 1);
+
+        match &parsed.transports[0] {
+            ClientConfig::QuicPlain(opts) => {
+                // sni_override should default to None when not present
+                assert!(opts.sni_override.is_none());
+                assert!(opts.host.is_none());
+                assert_eq!(opts.id_pubkey, "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=");
+                // effective_sni falls back to IP when no host or sni_override
+                assert_eq!(opts.effective_sni(), "192.168.100.3");
+            }
+            _ => panic!("Expected QuicPlain variant"),
+        }
+
         Ok(())
     }
 }

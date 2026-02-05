@@ -12,6 +12,7 @@ transport_type = "quic_plain"
 [transports.transport.args]
 address = "[::1]:443"
 id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="
+sni_override = "example.com"
 
 
 
@@ -24,4 +25,5 @@ transport_type = "tls_plain"
 [transports.transport.args]
 address = "[::1]:443"
 host = "alt.domain.com"
+sni_override = "example.com"
 id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="

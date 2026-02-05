@@ -1,5 +1,6 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
@@ -14,6 +15,8 @@ use tracing::*;
 
 use crate::transport::tls::certs::IdentityBasedVerifier;
 use crate::transport::tls::certs::ServerConfigSource;
+
+pub use super::ClientOptions;
 
 pub(crate) mod certs;
 
@@ -80,20 +83,6 @@ pub fn create_listener(options: &ServerConfig) -> Result<TlsAcceptor> {
 
 // ====================================[ Client Side ]====================================
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct ClientOptions {
-    /// Address describing the remote transport server
-    ///
-    /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
-    pub addresses: Vec<SocketAddr>,
-
-    /// Override hostname used for certificate verification
-    pub host: Option<String>,
-
-    /// Use identity public key to verify server self signed certificate base64 encoded
-    pub id_pubkey: String,
-}
-
 pub async fn transport_conn(
     options: &ClientOptions,
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
@@ -101,7 +90,8 @@ pub async fn transport_conn(
     let mut bytes = [0u8; ed25519_dalek::PUBLIC_KEY_LENGTH];
     BASE64_STANDARD.decode_slice(&options.id_pubkey, &mut bytes)?;
     let verif_key = VerifyingKey::from_bytes(&bytes)?;
-    let alt_names = options.host.clone().map(|h| vec![h]);
+
+    let alt_names = options.alt_names_for_verification();
     let verifier = IdentityBasedVerifier::new_with_alt_names(&verif_key, alt_names).unwrap();
 
     let client_crypto = rustls::ClientConfig::builder()
@@ -111,10 +101,12 @@ pub async fn transport_conn(
 
     let connector = TlsConnector::from(Arc::new(client_crypto));
 
-    // If no hostname is provided use the IP address of the remote server as the hostname.
-    let addr_host = options.addresses[0].ip().to_string();
-    let host = options.host.clone().unwrap_or(addr_host);
-    let sni = ServerName::try_from(host).unwrap();
+    let sni_str = options.effective_sni();
+    if options.sni_override.is_some() {
+        info!("using SNI override: {}", sni_str);
+    }
+
+    let sni = ServerName::try_from(sni_str).context("invalid SNI hostname")?;
 
     let stream = TcpStream::connect(&options.addresses[..]).await?;
     connector
