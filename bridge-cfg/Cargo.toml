@@ -13,7 +13,7 @@ ed25519-dalek = { version = "2.2", features = [
 	"pem",
 	"rand_core",
 ] }
-rand = "0.8"
+rand = "0.9"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 similar.workspace = true
