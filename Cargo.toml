@@ -17,7 +17,7 @@ base64 = "0.22.1"
 bs58 = "0.5.1"
 bytes = "1"
 clap = { version = "4", features = ["derive", "string"] }
-ed25519-dalek = { version = "3.0.0-pre.4", features = [
+ed25519-dalek = { version = "3.0.0-pre.6", features = [
     "pkcs8",
     "alloc",
     "pem",
