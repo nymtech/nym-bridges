@@ -67,7 +67,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = [
 ] }
 tokio-util = { version = "0.7", features = ["full"] }
 toml = "0.9"
-toml_edit = "0.23"
+toml_edit = "0.24"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = [
     "env-filter",
