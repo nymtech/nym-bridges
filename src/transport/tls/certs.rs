@@ -23,10 +23,10 @@
 //!     - done last to avoid ed25519 signature verification in case string based checks fail
 //!   - uses the default [`rustls::client::WebPkiServerVerifier`] to verify TLS 1.2 / TLS 1.3
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use base64::prelude::*;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
-use ed25519_dalek::pkcs8::{DecodePublicKey, EncodePrivateKey};
+use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rcgen::{Certificate, CertificateParams, DnType, KeyPair};
 use rustls::client::WebPkiServerVerifier;
@@ -37,7 +37,7 @@ use tracing::*;
 use webpki_roots::TLS_SERVER_ROOTS;
 use x509_parser::prelude::*;
 
-use std::sync::Arc;
+use std::{fmt::Debug, fs, path::Path, sync::Arc};
 
 pub fn get_cert_signed_by_ed25519<'a>(
     common_name: String,
@@ -274,6 +274,13 @@ impl ServerConfigSource {
         Ok(Self::from_identity(bytes))
     }
 
+    pub fn from_pkcs8_pem_file<P: AsRef<Path> + Debug>(path: P) -> Result<Self> {
+        let pem = fs::read_to_string(path.as_ref())?;
+        let signing_key = SigningKey::from_pkcs8_pem(&pem)
+            .map_err(|e| anyhow!("failed to parse identity key in {path:?}: {e}"))?;
+        Ok(Self::from_identity(signing_key.to_bytes()))
+    }
+
     pub fn into_server_config(self) -> Result<rustls::ServerConfig> {
         let key_bytes = self.0;
         info!("initializing from transport identity keypair");
@@ -298,9 +305,12 @@ impl ServerConfigSource {
 
 #[cfg(test)]
 mod test {
-    use rustls_pki_types::DnsName;
-
     use super::*;
+    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::pkcs8::{EncodePrivateKey, spki::der::pem::LineEnding};
+    use rustls_pki_types::DnsName;
+    use std::fs;
+    use tempfile::NamedTempFile;
 
     /// Make sure that client connection using domain name not signed by the
     /// identity key derived cert gives an InvalidCertificate(NotValidForName) error.
@@ -446,6 +456,24 @@ mod test {
         assert!(
             handshake_complete,
             "Handshake did not complete within {MAX_ITERATIONS} iterations",
+        );
+    }
+
+    #[test]
+    fn read_pkcs8_pem_file_parses_valid_ed25519_key() {
+        let expected_key = SigningKey::from_bytes(&[7u8; ed25519_dalek::SECRET_KEY_LENGTH]);
+        let pem = expected_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("failed to encode key as PKCS8 PEM");
+
+        let pem_file = NamedTempFile::new().expect("failed to create temporary PEM file");
+        fs::write(pem_file.path(), pem.as_bytes()).expect("failed to write temporary PEM file");
+
+        let source = ServerConfigSource::from_pkcs8_pem_file(pem_file.path())
+            .expect("failed to parse PEM file");
+        assert_eq!(
+            source.public_identity(),
+            expected_key.verifying_key().to_bytes()
         );
     }
 }

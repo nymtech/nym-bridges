@@ -1,23 +1,16 @@
-use std::{
-    fs,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
-use ed25519_dalek::pkcs8::DecodePrivateKey;
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use rustls::pki_types::ServerName;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::*;
 
-use crate::transport::tls::certs::IdentityBasedVerifier;
-use crate::transport::tls::certs::ServerConfigSource;
+use crate::transport::tls::certs::{IdentityBasedVerifier, ServerConfigSource};
 
 pub(crate) mod certs;
 
@@ -56,9 +49,7 @@ impl ServerConfig {
         if let Some(ref base64_key) = self.identity_key {
             ServerConfigSource::from_identity_base64(base64_key)
         } else if let Some(ref key_path) = self.private_ed25519_identity_key_file {
-            let signing_key = read_pkcs8_pem_file(key_path)
-                .map_err(|e| anyhow!("failed to parse identity key in {key_path:?}: {e}"))?;
-            Ok(ServerConfigSource::from_identity(signing_key.to_bytes()))
+            ServerConfigSource::from_pkcs8_pem_file(key_path)
         } else {
             Err(anyhow!("no crypto source provided"))
         }
@@ -74,11 +65,6 @@ impl ServerConfig {
         let public_id = crypto_source.public_identity();
         Ok(BASE64_STANDARD.encode(&public_id[..]))
     }
-}
-
-fn read_pkcs8_pem_file<P: AsRef<Path>>(path: P) -> Result<SigningKey> {
-    let str = &fs::read_to_string(path)?;
-    SigningKey::from_pkcs8_pem(str).context("failed to parse pem file")
 }
 
 pub fn create_listener(options: &ServerConfig) -> Result<TlsAcceptor> {

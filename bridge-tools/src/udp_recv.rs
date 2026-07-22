@@ -9,7 +9,7 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
 use clap::Parser;
-use rand::{SeedableRng, RngExt};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::collections::HashSet;
 use tokio::{net::UdpSocket, time::Instant};
