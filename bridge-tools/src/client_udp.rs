@@ -9,7 +9,7 @@ use tracing::*;
 use std::{io::Read, net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 
 use nym_bridges::config::{ClientConfig, PersistedClientConfig};
-use nym_bridges::connection::process_udp;
+use nym_bridges::forward::process_udp;
 use nym_bridges::session::Session;
 use nym_bridges::transport::{quic, tls};
 
@@ -135,10 +135,7 @@ async fn handle_session(
                 session_id = %session.id()
             );
 
-            if let Err(e) = quic_connection(session, opts, socket, token)
-                .instrument(span)
-                .await
-            {
+            if let Err(e) = quic_connection(opts, socket, token).instrument(span).await {
                 error!("{e}");
             }
         }
@@ -151,10 +148,7 @@ async fn handle_session(
                 session_id = %session.id()
             );
 
-            if let Err(e) = tls_connection(session, opts, socket, token)
-                .instrument(span)
-                .await
-            {
+            if let Err(e) = tls_connection(opts, socket, token).instrument(span).await {
                 error!("{e}");
             }
         }
@@ -162,13 +156,12 @@ async fn handle_session(
 }
 
 async fn quic_connection(
-    session: Session,
     opts: &quic::ClientOptions,
     socket: Arc<UdpSocket>,
     token: CancellationToken,
 ) -> Result<()> {
     let start = Instant::now();
-    let conn = quic::transport_conn(opts)
+    let conn = quic::transport_conn(opts, |_| {})
         .await
         .context("failed to connect to transport conn")?;
 
@@ -179,7 +172,7 @@ async fn quic_connection(
 
     debug!("quic transport connected in {:?}", start.elapsed());
 
-    process_udp(rd, wr, socket, session, 1500, token).await;
+    process_udp(rd, wr, socket, 1500, None, token).await;
     conn.close(0u32.into(), b"done");
     info!("end session");
     debug!("stats: {:?}", conn.stats());
@@ -188,7 +181,6 @@ async fn quic_connection(
 }
 
 async fn tls_connection(
-    session: Session,
     opts: &tls::ClientOptions,
     socket: Arc<UdpSocket>,
     token: CancellationToken,
@@ -204,7 +196,7 @@ async fn tls_connection(
 
     let (rd, wr) = tokio::io::split(transport_conn);
 
-    process_udp(rd, wr, socket, session, 1500, token).await;
+    process_udp(rd, wr, socket, 1500, None, token).await;
     info!("end session");
 
     Ok(())

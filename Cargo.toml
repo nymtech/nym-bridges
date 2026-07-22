@@ -7,7 +7,7 @@ members = ["bridge-cfg", "nym-bridge", "bridge-tools"]
 [package]
 authors = ["Nym Technologies SA"]
 name = "nym-bridges"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 description = "Pluggable transport library for securing and obfuscating Nym VPN traffic."
 license = "AGPL-3.0-only"
@@ -52,6 +52,7 @@ quinn-proto = { version = "0.11", default-features = false, features = [
 rand = "0.10"
 rand_chacha = "0.10"
 rcgen = "0.14"
+reqwest = { version = "0.13.4",  default-features = false}
 ring = "0.17"
 rustc-hash = "2"
 rustls = { version = "0.23.5", default-features = false, features = [
@@ -90,6 +91,12 @@ uuid = "1.20"
 x509-parser = { version = "0.18", features = ["verify"] }
 webpki-roots = "1.0"
 
+
+# Nym Dependencies
+nym-config = "1.21.4"
+nym-bin-common = "1.21.4"
+
+
 [lib]
 name = "nym_bridges"
 path = "src/lib.rs"
@@ -122,6 +129,7 @@ rustls = { workspace = true, default-features = false, features = [
     "std",
     "ring",
     "logging",
+    "aws_lc_rs",
 ] }
 rustls-pki-types.workspace = true
 serde = { workspace = true, features = ["derive"] }

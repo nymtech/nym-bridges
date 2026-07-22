@@ -11,7 +11,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use nym_bridges::{
     config::{ForwardConfig, PersistedServerConfig, TransportServerConfig},
-    connection::process_udp,
+    forward::process_udp,
     session::Session,
     transport::{quic, tls},
 };
@@ -211,7 +211,7 @@ pub async fn handle_tls_connection(
     async {
         debug!("accepted tls connection");
 
-        if let Err(err) = handle_tls_connection_inner(conn, session, fwd_cfg, token).await {
+        if let Err(err) = handle_tls_connection_inner(conn, fwd_cfg, token).await {
             warn!("connection error: {err}");
         }
     }
@@ -221,7 +221,6 @@ pub async fn handle_tls_connection(
 
 async fn handle_tls_connection_inner(
     conn: tokio_rustls::server::TlsStream<TcpStream>,
-    session: Session,
     fwd_cfg: ForwardConfig,
     token: CancellationToken,
 ) -> Result<()> {
@@ -231,7 +230,7 @@ async fn handle_tls_connection_inner(
     local_sock.connect(fwd_cfg.address).await?;
 
     let (recv, send) = tokio::io::split(conn);
-    process_udp(recv, send, local_sock, session.clone(), 1500, session_token).await;
+    process_udp(recv, send, local_sock, 1500, None, session_token).await;
 
     info!("end session:"); // in theory handle session logging stats on close
     // debug!("stats: {:?}", session.stats());
@@ -254,7 +253,7 @@ pub async fn handle_quic_connection(
     async {
         debug!("accepted quic connection");
 
-        if let Err(err) = handle_quic_connection_inner(conn, session, fwd_cfg, token).await {
+        if let Err(err) = handle_quic_connection_inner(conn, fwd_cfg, token).await {
             warn!("connection error: {err}");
         }
     }
@@ -266,7 +265,6 @@ pub async fn handle_quic_connection(
 /// traffic.
 async fn handle_quic_connection_inner(
     conn: quinn::Incoming,
-    session: Session,
     fwd_cfg: ForwardConfig,
     token: CancellationToken,
 ) -> Result<()> {
@@ -290,7 +288,7 @@ async fn handle_quic_connection_inner(
     let local_sock = Arc::new(tokio::net::UdpSocket::bind("[::]:0").await?);
     local_sock.connect(fwd_cfg.address).await?;
 
-    process_udp(recv, send, local_sock, session.clone(), 1500, session_token).await;
+    process_udp(recv, send, local_sock, 1500, None, session_token).await;
 
     connection.close(0u32.into(), b"done");
     info!("end session"); // in theory handle session logging stats on close

@@ -145,7 +145,7 @@ async fn process_quic<RW>(
     debug!("opening transport connection");
     let start = Instant::now();
 
-    let transport_conn = match quic::transport_conn(opt).await {
+    let transport_conn = match quic::transport_conn(opt, |_| {}).await {
         Ok(conn) => conn,
         Err(e) => {
             error!("failed to connect to transport conn: {}", e);

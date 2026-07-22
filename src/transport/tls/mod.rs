@@ -10,6 +10,7 @@ use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::*;
 
+use crate::error::TransportError;
 use crate::transport::tls::certs::{IdentityBasedVerifier, ServerConfigSource};
 
 pub(crate) mod certs;
@@ -96,14 +97,28 @@ pub async fn transport_conn(
     let mut bytes = [0u8; ed25519_dalek::PUBLIC_KEY_LENGTH];
     BASE64_STANDARD.decode_slice(&options.id_pubkey, &mut bytes)?;
     let verif_key = VerifyingKey::from_bytes(&bytes)?;
-    let alt_names = options.host.clone().map(|h| vec![h]);
-    let verifier = IdentityBasedVerifier::new_with_alt_names(&verif_key, alt_names).unwrap();
 
-    let client_crypto = rustls::ClientConfig::builder()
+    let crypto_provider = rustls::crypto::CryptoProvider::get_default()
+        .unwrap_or(&Arc::new(rustls::crypto::ring::default_provider()))
+        .clone();
+
+    let alt_names = options.host.clone().map(|h| vec![h]);
+    let verifier = IdentityBasedVerifier::builder(&verif_key)
+        .with_alt_names(alt_names)
+        .with_crypto_provider(crypto_provider.clone())
+        .build()
+        .map_err(|e| {
+            TransportError::Config(format!(
+                "failed to initialize quic cert verifier from options: {e}"
+            ))
+        })?;
+
+    let client_crypto = rustls::ClientConfig::builder_with_provider(crypto_provider)
+        .with_protocol_versions(rustls::DEFAULT_VERSIONS)
+        .map_err(|e| TransportError::other(format!("rustls client config init failed: {e}")))?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
-
     let connector = TlsConnector::from(Arc::new(client_crypto));
 
     // If no hostname is provided use the IP address of the remote server as the hostname.

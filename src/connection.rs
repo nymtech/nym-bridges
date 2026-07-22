@@ -1,16 +1,79 @@
-use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::os::fd::RawFd;
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    time::Instant,
+};
 
 use anyhow::Result;
-use bytes::{Buf, BytesMut};
-use futures::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::net::UdpSocket;
-use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
-use crate::session::Session;
+use crate::error::TransportError;
+use crate::transport::quic;
+
+pub(crate) fn make_socket(addr: Option<SocketAddr>) -> std::io::Result<std::net::UdpSocket> {
+    let addr = addr.unwrap_or((Ipv4Addr::UNSPECIFIED, 0).into());
+    let socket = std::net::UdpSocket::bind(addr)?;
+    socket.set_nonblocking(true)?;
+    Ok(socket)
+}
+
+pub struct BridgeConn {
+    /// Configured parameters from which this bridge connections was built
+    #[allow(unused)] // we will want these later for metrics tracking
+    pub(crate) params: BridgeParameters,
+    /// Remote address of the bridge transport connection
+    pub(crate) endpoint: SocketAddr,
+    pub(crate) reader: Box<dyn AsyncRead + Send + Unpin>,
+    pub(crate) writer: Box<dyn AsyncWrite + Send + Unpin>,
+}
+
+impl BridgeConn {
+    pub async fn try_connect(
+        params: BridgeParameters,
+        token: CancellationToken,
+        #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl FnOnce(RawFd),
+    ) -> Result<Self, TransportError> {
+        let start = Instant::now();
+
+        match params {
+            BridgeParameters::QuicPlain(ref opts) => {
+                let conn = token
+                    .run_until_cancelled(quic::transport_conn(
+                        opts,
+                        #[cfg(any(target_os = "linux", target_os = "android"))]
+                        on_socket_open,
+                    ))
+                    .await
+                    .ok_or(TransportError::Cancelled)??;
+                let endpoint = conn.remote_address();
+                // .context("failed to connect to transport conn")?;
+                let (writer, reader) = token
+                    .run_until_cancelled(conn.open_bi())
+                    .await
+                    .ok_or(TransportError::Cancelled)??;
+                // .context("failed to connect to transport stream")?;
+                info!("quic transport connected in {:?}", start.elapsed());
+                Ok(Self {
+                    reader: Box::new(reader),
+                    writer: Box::new(writer),
+                    params,
+                    endpoint,
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "transport_type", content = "args")]
+#[serde(rename_all = "snake_case")]
+pub enum BridgeParameters {
+    QuicPlain(quic::ClientOptions),
+}
 
 pub async fn copy_bidirectional<IR, IS, ER, ES>(
     token: CancellationToken,
@@ -60,6 +123,7 @@ where
     Ok(())
 }
 
+/*
 pub async fn process_udp<R, W>(
     rd: R,
     wr: W,
@@ -333,3 +397,5 @@ mod test {
         assert!(!address_match(addr4, addr2));
     }
 }
+
+*/

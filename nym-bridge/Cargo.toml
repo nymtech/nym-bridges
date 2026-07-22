@@ -1,6 +1,6 @@
 [package]
 name = "nym-bridge"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 publish = false
 authors = ["Nym Technologies SA"]
@@ -11,7 +11,7 @@ homepage = "https://nymtech.net"
 
 [dependencies]
 anyhow.workspace = true
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 quinn.workspace = true
 rustls = { workspace = true, default-features = false, features = [
 	"std",
@@ -35,6 +35,6 @@ tracing-subscriber = { workspace = true, default-features = false, features = [
 ] }
 
 
-nym-bridges = { path = "../", version = "0.1.2" }
+nym-bridges = { path = "../" }
 
-nym-bin-common = "1.21.3"
+nym-bin-common = "1.21.4"

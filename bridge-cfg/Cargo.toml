@@ -1,6 +1,6 @@
 [package]
 name = "bridge-cfg"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 publish = false
 authors = ["Nym Technologies SA"]
@@ -13,7 +13,7 @@ homepage = "https://nymtech.net"
 
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive", "string"] }
-ed25519-dalek = { version = "3.0", features = [
+ed25519-dalek = { workspace = true, features = [
 	"pkcs8",
 	"alloc",
 	"pem",
@@ -34,12 +34,12 @@ tracing-subscriber = { workspace = true, default-features = false, features = [
 ] }
 toml_edit.workspace = true
 tempdir.workspace = true
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { workspace = true, default-features = false, features = [
 	"json",
 	"blocking",
-	"rustls-tls",
+	"rustls",
 ] }
 
-nym-bridges = { path = "../", version = "0.1.2" }
-nym-config = "1.21.3"
-nym-bin-common = "1.21.3"
+nym-bridges = { path = "../" }
+nym-config.workspace = true
+nym-bin-common.workspace = true

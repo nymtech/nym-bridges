@@ -13,8 +13,8 @@ use std::sync::Once;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use nym_bridges::connection::process_udp;
-use nym_bridges::session::Session;
+use nym_bridges::forward::process_udp;
+// use nym_bridges::session::Session;
 
 mod sender;
 use sender::*;
@@ -120,10 +120,10 @@ async fn udp_length_delimited() {
         .connect(client_udp1.local_addr().unwrap())
         .await
         .unwrap();
-    let client_session = Session::new(
-        &client_udp2.local_addr().unwrap(),
-        &"[::1]:1000".parse().unwrap(), // fake transport remote address
-    );
+    // let client_session = Session::new(
+    //     &client_udp2.local_addr().unwrap(),
+    //     &"[::1]:1000".parse().unwrap(), // fake transport remote address
+    // );
 
     let server_udp1 = Arc::new(UdpSocket::bind("[::1]:0").await.unwrap());
     let server_udp2 = Arc::new(UdpSocket::bind("[::1]:0").await.unwrap());
@@ -131,10 +131,10 @@ async fn udp_length_delimited() {
         .connect(server_udp1.local_addr().unwrap())
         .await
         .unwrap();
-    let server_session = Session::new(
-        &server_udp2.local_addr().unwrap(),
-        &"[::1]:2001".parse().unwrap(), // fake transport remote address
-    );
+    // let server_session = Session::new(
+    //     &server_udp2.local_addr().unwrap(),
+    //     &"[::1]:2001".parse().unwrap(), // fake transport remote address
+    // );
 
     let token = CancellationToken::new();
     let mtu = 1500;
@@ -146,8 +146,9 @@ async fn udp_length_delimited() {
         ct_conn_rd,
         ct_conn_wr,
         client_udp1.clone(),
-        client_session,
+        // client_session,
         mtu,
+        None,
         token.clone(),
     ));
 
@@ -156,8 +157,9 @@ async fn udp_length_delimited() {
         srv_conn_rd,
         srv_conn_wr,
         server_udp1.clone(),
-        server_session,
+        // server_session,
         mtu,
+        None,
         token.clone(),
     ));
 

@@ -1,6 +1,6 @@
 [package]
 name = "bridge-tools"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 publish = false
 authors = ["Nym Technologies SA"]
@@ -35,7 +35,7 @@ base64.workspace = true
 bs58.workspace = true
 bytes.workspace = true
 clap = { version = "4", features = ["derive"] }
-ed25519-dalek = { version = "3.0.0-pre.5", features = [
+ed25519-dalek = { workspace = true, features = [
 	"pkcs8",
 	"alloc",
 	"pem",
@@ -85,4 +85,4 @@ uuid.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
 webpki-roots.workspace = true
 
-nym-bridges = { path = "../", version = "0.1.2" }
+nym-bridges = { path = "../" }

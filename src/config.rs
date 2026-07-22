@@ -73,6 +73,16 @@ impl PersistedServerConfig {
 
 // ====================================[ Client Side ]====================================
 
+// pub trait Named {
+//     fn name() -> String;
+// }
+
+// pub trait Versioned {
+//     fn version() -> String;
+// }
+
+// pub trait Persistable: Serialize + Deserialize + Versioned {}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(tag = "transport_type", content = "args")]
 #[serde(rename_all = "snake_case")]

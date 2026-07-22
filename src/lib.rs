@@ -4,36 +4,7 @@ pub mod error;
 pub mod session;
 pub mod transport;
 // mod stats;
-
-/*
-/// Forwarder for client connections,
-///
-/// Accept incoming ingress connections and establishes a transport connection to the server
-/// over which it forwards data.
-struct ClientForwarder {
-    // Fields for client forwarder
-}
-
-/// Forwarder for server connections.
-///
-/// Accepts incoming transport connections and forwards them to the
-/// appropriate local connection handler.
-struct ServerForwarder {
-    // Fields for server forwarder
-}
-
-impl ServerForwarder {
-    pub fn new() -> Self {
-        Self {
-            // Initialize fields
-        }
-    }
-
-    pub fn listen(&self) {
-        // Implementation for listening to incoming connections
-    }
-}
-*/
+pub mod forward;
 
 #[allow(unused)]
 #[cfg(test)]
