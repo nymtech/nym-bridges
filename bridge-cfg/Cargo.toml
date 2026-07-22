@@ -12,7 +12,7 @@ homepage = "https://nymtech.net"
 
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive", "string"] }
-ed25519-dalek = { version = "2.2", features = [
+ed25519-dalek = { version = "3.0", features = [
 	"pkcs8",
 	"alloc",
 	"pem",
