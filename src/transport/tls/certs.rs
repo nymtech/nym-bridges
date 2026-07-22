@@ -309,9 +309,7 @@ mod test {
         // let level = Some(tracing::level_filters::LevelFilter::DEBUG);
         // crate::test_utils::init_subscriber(level);
 
-        let mut rng = rand::thread_rng();
-
-        let signing_key: SigningKey = SigningKey::generate(&mut rng);
+        let signing_key: SigningKey = SigningKey::generate(&mut rand::rng());
         let verif_key = signing_key.verifying_key();
         let encoded_pubkey = bs58::encode(verif_key.to_bytes()).into_string();
 
@@ -366,9 +364,7 @@ mod test {
         // let level = Some(tracing::level_filters::LevelFilter::DEBUG);
         // crate::test_utils::init_subscriber(level);
 
-        let mut rng = rand::thread_rng();
-
-        let signing_key: SigningKey = SigningKey::generate(&mut rng);
+        let signing_key: SigningKey = SigningKey::generate(&mut rand::rng());
         let verif_key = signing_key.verifying_key();
         let encoded_pubkey = bs58::encode(verif_key.to_bytes()).into_string();
 

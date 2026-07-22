@@ -22,7 +22,7 @@ base64 = "0.22.1"
 bs58 = "0.5.1"
 bytes = "1"
 clap = { version = "4", features = ["derive", "string"] }
-ed25519-dalek = { version = "3.0.0-pre.4", features = [
+ed25519-dalek = { version = "3.0", features = [
     "pkcs8",
     "alloc",
     "pem",
@@ -45,8 +45,8 @@ quinn = { version = "0.11", default-features = false, features = [
 quinn-proto = { version = "0.11", default-features = false, features = [
     "rustls",
 ] }
-rand = "0.9"
-rand_chacha = "0.9"
+rand = "0.10"
+rand_chacha = "0.10"
 rcgen = "0.14"
 ring = "0.17"
 rustc-hash = "2"
@@ -94,7 +94,7 @@ anyhow.workspace = true
 base64.workspace = true
 bs58.workspace = true
 bytes.workspace = true
-ed25519-dalek = { version = "2.2", features = [
+ed25519-dalek = { workspace=true, features = [
     "pkcs8",
     "alloc",
     "pem",
@@ -109,7 +109,7 @@ once_cell.workspace = true
 pin-project-lite.workspace = true
 quinn-proto.workspace = true
 quinn.workspace = true
-rand = "0.8"
+rand = {workspace = true, features = ["thread_rng", "sys_rng"]}
 rcgen.workspace = true
 ring.workspace = true
 rustc-hash.workspace = true

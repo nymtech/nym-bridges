@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::*;
 
-use rand::Rng;
+use rand::RngExt;
 use tokio::net::UdpSocket;
 use tokio::time::sleep;
 
@@ -88,7 +88,7 @@ impl Generator {
             count,
             n_sent: 0,
             last_send: None,
-            rng: rand::thread_rng(),
+            rng: rand::rng(),
             packet_pool: PacketPool::new(10, max_size), // Pool of 10 buffers
         }
     }
@@ -127,7 +127,7 @@ impl Generator {
                 Rate::Random { min, max } => {
                     let min_nanos = min.as_nanos() as u64;
                     let max_nanos = max.as_nanos() as u64;
-                    let random_nanos = self.rng.gen_range(min_nanos..=max_nanos);
+                    let random_nanos = self.rng.random_range(min_nanos..=max_nanos);
                     Duration::from_nanos(random_nanos)
                 }
             };
@@ -144,7 +144,7 @@ impl Generator {
     fn generate_size(&mut self) -> usize {
         match &self.size {
             Size::Fixed(size) => *size,
-            Size::Random { min, max } => self.rng.gen_range(*min..=*max),
+            Size::Random { min, max } => self.rng.random_range(*min..=*max),
             Size::Gradient { min, max, n } => {
                 let progress = (self.n_sent % n) as f64 / *n as f64;
                 let size_range = *max - *min;
