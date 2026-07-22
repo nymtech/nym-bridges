@@ -9,7 +9,7 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
 use clap::Parser;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::collections::HashSet;
 use tokio::{net::UdpSocket, time::Instant};
@@ -137,7 +137,7 @@ impl Generator {
     fn new(size: Size, count: usize, seed: Option<u64>) -> Self {
         let rng = match seed {
             Some(s) => rand_chacha::ChaCha20Rng::seed_from_u64(s),
-            None => rand_chacha::ChaCha20Rng::from_os_rng(),
+            None => rand_chacha::ChaCha20Rng::from_rng(&mut rand::rng()),
         };
 
         Self {

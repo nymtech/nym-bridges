@@ -167,7 +167,7 @@ impl Generator {
         };
         let rng = match seed {
             Some(s) => rand_chacha::ChaCha20Rng::seed_from_u64(s),
-            None => rand_chacha::ChaCha20Rng::from_os_rng(),
+            None => rand_chacha::ChaCha20Rng::from_rng(&mut rand::rng()),
         };
         if match size {
             Size::Fixed(s) => s < 4,

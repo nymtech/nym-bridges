@@ -1,10 +1,8 @@
-use std::path::PathBuf;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use base64::prelude::*;
-use ed25519_dalek::pkcs8::DecodePrivateKey;
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use quinn_proto::crypto::rustls::QuicClientConfig;
 use quinn_proto::crypto::rustls::QuicServerConfig;
 use serde::{Deserialize, Serialize};
@@ -53,9 +51,7 @@ impl ServerConfig {
         if let Some(ref base64_key) = self.identity_key {
             ServerConfigSource::from_identity_base64(base64_key)
         } else if let Some(ref key_path) = self.private_ed25519_identity_key_file {
-            let signing_key = SigningKey::read_pkcs8_pem_file(key_path)
-                .map_err(|e| anyhow!("failed to parse identity key in {key_path:?}: {e}"))?;
-            Ok(ServerConfigSource::from_identity(signing_key.to_bytes()))
+            ServerConfigSource::from_pkcs8_pem_file(key_path)
         } else {
             Err(anyhow!("no crypto source provided"))
         }
