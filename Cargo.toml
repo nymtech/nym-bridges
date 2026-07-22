@@ -9,6 +9,11 @@ authors = ["Nym Technologies SA"]
 name = "nym-bridges"
 version = "0.1.2"
 edition = "2024"
+description = "Pluggable transport library for securing and obfuscating Nym VPN traffic."
+license = "AGPL-3.0-only"
+repository = "https://github.com/nymtech/nym-bridges"
+homepage = "https://nymtech.net"
+readme = "README.md"
 
 
 [workspace.dependencies]

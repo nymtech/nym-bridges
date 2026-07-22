@@ -649,7 +649,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1282,8 +1282,9 @@ dependencies = [
 
 [[package]]
 name = "nym-bin-common"
-version = "1.20.1"
-source = "git+https://github.com/nymtech/nym.git#940fb09ae449668db58931069c5c804d2edab241"
+version = "1.21.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7396a71f7b84090f90115fd45eaf9c9eb30e350e18bdc0dc3972864a4e25b085"
 dependencies = [
  "const-str",
  "log",
@@ -1351,8 +1352,9 @@ dependencies = [
 
 [[package]]
 name = "nym-config"
-version = "1.20.1"
-source = "git+https://github.com/nymtech/nym.git#940fb09ae449668db58931069c5c804d2edab241"
+version = "1.21.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb6ea8adae40a71dc3a47b5bc81928e9185dcdbef806fd877a9e4509cda40121"
 dependencies = [
  "dirs",
  "handlebars",
@@ -1366,12 +1368,12 @@ dependencies = [
 
 [[package]]
 name = "nym-network-defaults"
-version = "1.20.1"
-source = "git+https://github.com/nymtech/nym.git#940fb09ae449668db58931069c5c804d2edab241"
+version = "1.21.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e583290fed892fcf7081131a132ebd0ba7b807b024451b5bc958ac734df34d0"
 dependencies = [
  "cargo_metadata 0.19.2",
  "dotenvy",
- "log",
  "regex",
  "schemars",
  "serde",

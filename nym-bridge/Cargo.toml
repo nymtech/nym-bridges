@@ -2,6 +2,11 @@
 name = "nym-bridge"
 version = "0.1.2"
 edition = "2024"
+authors = ["Nym Technologies SA"]
+description = "Server-side transparent forwarder that unwraps obfuscated Nym VPN bridge traffic."
+license = "AGPL-3.0-only"
+repository = "https://github.com/nymtech/nym-bridges"
+homepage = "https://nymtech.net"
 
 [dependencies]
 anyhow.workspace = true
@@ -29,6 +34,6 @@ tracing-subscriber = { workspace = true, default-features = false, features = [
 ] }
 
 
-nym-bridges = { path = "../" }
+nym-bridges = { path = "../", version = "0.1.2" }
 
-nym-bin-common = { git = "https://github.com/nymtech/nym.git" }
+nym-bin-common = "1.21.3"

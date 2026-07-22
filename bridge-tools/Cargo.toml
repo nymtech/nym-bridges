@@ -2,6 +2,11 @@
 name = "bridge-tools"
 version = "0.1.2"
 edition = "2024"
+authors = ["Nym Technologies SA"]
+description = "Client and debugging utilities for Nym transport bridges."
+license = "AGPL-3.0-only"
+repository = "https://github.com/nymtech/nym-bridges"
+homepage = "https://nymtech.net"
 
 [[bin]]
 name = "client"
@@ -79,4 +84,4 @@ uuid.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
 webpki-roots.workspace = true
 
-nym-bridges = { path = "../" }
+nym-bridges = { path = "../", version = "0.1.2" }

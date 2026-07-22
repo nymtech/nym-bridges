@@ -2,6 +2,11 @@
 name = "bridge-cfg"
 version = "0.1.2"
 edition = "2024"
+authors = ["Nym Technologies SA"]
+description = "Configuration tooling for Nym transport bridges."
+license = "AGPL-3.0-only"
+repository = "https://github.com/nymtech/nym-bridges"
+homepage = "https://nymtech.net"
 
 [dependencies]
 
@@ -34,6 +39,6 @@ reqwest = { version = "0.12", default-features = false, features = [
 	"rustls-tls",
 ] }
 
-nym-bridges = { path = "../" }
-nym-config = { git = "https://github.com/nymtech/nym.git" }
-nym-bin-common = { git = "https://github.com/nymtech/nym.git" }
+nym-bridges = { path = "../", version = "0.1.2" }
+nym-config = "1.21.3"
+nym-bin-common = "1.21.3"
