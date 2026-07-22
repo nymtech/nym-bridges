@@ -2,6 +2,7 @@
 name = "bridge-cfg"
 version = "0.1.2"
 edition = "2024"
+publish = false
 authors = ["Nym Technologies SA"]
 description = "Configuration tooling for Nym transport bridges."
 license = "AGPL-3.0-only"
