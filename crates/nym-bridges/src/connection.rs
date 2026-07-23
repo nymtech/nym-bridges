@@ -10,8 +10,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
-use crate::{config::ClientConfig, error::TransportError};
 use crate::transport::quic;
+use crate::{config::ClientConfig, error::TransportError};
 
 pub(crate) fn make_socket(addr: Option<SocketAddr>) -> std::io::Result<std::net::UdpSocket> {
     let addr = addr.unwrap_or((Ipv4Addr::UNSPECIFIED, 0).into());
@@ -67,7 +67,6 @@ impl BridgeConn {
                 error!("implementation in progress");
                 Err(TransportError::other("implementation ongoing"))
             }
-
         }
     }
 

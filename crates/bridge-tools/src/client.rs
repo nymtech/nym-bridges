@@ -218,8 +218,6 @@ async fn process_tls<RW>(
     }
 }
 
-
-
 pub async fn copy_bidirectional<IR, IS, ER, ES>(
     token: CancellationToken,
     ingress_addr: SocketAddr,

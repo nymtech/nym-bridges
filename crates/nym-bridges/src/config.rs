@@ -73,7 +73,6 @@ impl PersistedServerConfig {
 
 // ====================================[ Client Side ]====================================
 
-
 pub use crate::types::ClientConfig;
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]

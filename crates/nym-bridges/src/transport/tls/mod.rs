@@ -79,9 +79,9 @@ pub fn create_listener(options: &ServerConfig) -> Result<TlsAcceptor> {
 pub use crate::types::tls::ClientOptions;
 
 struct InnerClientOptions {
-        pub addresses: Vec<SocketAddr>,
-        pub host: Option<String>,
-        pub id_pubkey: VerifyingKey,
+    pub addresses: Vec<SocketAddr>,
+    pub host: Option<String>,
+    pub id_pubkey: VerifyingKey,
 }
 
 impl TryFrom<&ClientOptions> for InnerClientOptions {
@@ -110,10 +110,6 @@ impl InnerClientOptions {
         VerifyingKey::from_bytes(&pubkey_bytes)
             .map_err(|e| TransportError::config_err(format!("bad Quic bridge public key: {e}")))
     }
-
-    fn get_ipv4(&self) -> Option<SocketAddr> {
-        self.addresses.iter().find(|s| s.is_ipv4()).cloned()
-    }
 }
 
 pub async fn transport_conn(
@@ -122,9 +118,8 @@ pub async fn transport_conn(
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
 
-
     let mut bytes = [0u8; ed25519_dalek::PUBLIC_KEY_LENGTH];
-    BASE64_STANDARD.decode_slice(&inner_options.id_pubkey, &mut bytes)?;
+    BASE64_STANDARD.decode_slice(inner_options.id_pubkey, &mut bytes)?;
     let verif_key = VerifyingKey::from_bytes(&bytes)?;
 
     let crypto_provider = rustls::crypto::CryptoProvider::get_default()

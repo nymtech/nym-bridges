@@ -24,7 +24,10 @@ crate-type = ["cdylib", "lib"]
 workspace = true
 
 [features]
-default = []
+default = ["serde"]
+uniffi-bindings = ["nym-bridges-types/uniffi-bindings"]
+typescript-bindings = ["nym-bridges-types/typescript-bindings"]
+serde = ["nym-bridges-types/serde"]
 # TODO: features that expose the featues of the types crate
 
 [dependencies]
@@ -77,7 +80,7 @@ uuid.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
 webpki-roots.workspace = true
 
-nym-bridges-types = { path = "../nym-bridges-types", features = ["serde"]}
+nym-bridges-types = { path = "../nym-bridges-types" }
 
 
 [dev-dependencies]
