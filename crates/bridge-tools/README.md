@@ -15,5 +15,5 @@ udp-recv -b "[::1]:50001" -s 3333 --vv
 ## Simple Client UDP 
 
 ```sh
-client-udp -c ../test-env/test-config/local/client_quic.toml
+client-udp -c ../../test-env/test-config/local/client_quic.toml
 ```

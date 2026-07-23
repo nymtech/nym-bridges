@@ -6,11 +6,14 @@
 
 ```sh
 # Download the package
-wget https://github.com/nymtech/nym-bridges/releases/download/bridge-binaries-v0.1.2/nym-bridge_0.1.2-1_amd64.deb
+VERSION="<release-version>"   # example: 0.2.0
+REVISION="1"
+ARCH="amd64"
+wget "https://github.com/nymtech/nym-bridges/releases/download/bridge-binaries-v${VERSION}/nym-bridge_${VERSION}-${REVISION}_${ARCH}.deb"
 
 
 # Install the package
-sudo dpkg -i nym-bridge_0.1.2-1_amd64.deb
+sudo dpkg -i "nym-bridge_${VERSION}-${REVISION}_${ARCH}.deb"
 sudo apt-get install -f
 
 # Start service
@@ -22,14 +25,17 @@ sudo systemctl start nym-bridge
 
 ```sh
 # From repository root
-cargo deb
+cargo deb -p nym-bridge
+
+# Pick the newest built nym-bridge package artifact
+DEB="$(ls -1t target/debian/nym-bridge_*_amd64.deb | head -n1)"
 
 # Check build artifacts
-lintian target/debian/nym-bridge_0.1.2-1_amd64.deb
+lintian "$DEB"
 
 # Inspect package contents
 mkdir debdir
-dpkg-deb -R target/debian/nym-bridge_0.1.2-1_amd64.deb debdir
+dpkg-deb -R "$DEB" debdir
 tree debdir
 ```
 

@@ -114,21 +114,7 @@ pub fn create_endpoint(options: &ServerConfig) -> Result<quinn::Endpoint> {
 
 // ====================================[ Client Side ]====================================
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct ClientOptions {
-    /// Address describing the remote transport server. This is a vec to support multiple addresses
-    /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
-    /// as the key material should not be used across multiple instances.
-    ///
-    /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
-    pub addresses: Vec<SocketAddr>,
-
-    /// Override hostname used for certificate verification
-    pub host: Option<String>,
-
-    /// Use identity public key to verify server self signed certificate
-    pub id_pubkey: String,
-}
+pub use crate::types::quic::ClientOptions;
 
 struct InnerClientOptions {
     pub addresses: Vec<SocketAddr>,

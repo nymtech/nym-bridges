@@ -21,10 +21,10 @@ This tool assumes that the `nym-bridge` is going to be run alongside a `nym-node
 
 ```sh
 # Try a dry run to preview the configuration changes
-bridge-cfg -d "$HOME/.nym/nym-nodes/default-nym-node/config/" --dry-run
+bridge-cfg --gen --dry-run -o /etc/nym/bridges.toml
 
 # Allow configuration changes to be persisted
-bridge-cfg -d "$HOME/.nym/nym-nodes/default-nym-node/config/"
+bridge-cfg --gen -o /etc/nym/bridges.toml
 ```
 
 #### Using Systemd
@@ -34,7 +34,7 @@ A systemd service file is provided to help run the nym-bridge as a daemon
 ```sh
 # (make any modifications to the service file)
 
-sudo cp nym-bridge.service /etc/systemd/system/
+sudo cp service/nym-bridge.service /etc/systemd/system/
 sudo systemctl enable nym-bridge
 sudo systemctl start nym-bridge
 ```
@@ -152,8 +152,8 @@ quic_plain listeners if there were a reason to do so.
 This file needs saved to be provided to the nym-bridge binary (e.g.
 `$HOME/.nym/nym-nodes/default-nym-node/config/bridges.toml`). 
 
-The latest bridge config template for the configuration can be found in the root of the nym-bridge
-directory.
+The latest bridge config template for the configuration can be found at the repository root in
+`bridges.template.toml`.
 <details>
 <summary>Example Bridge Configuration template</summary>
 

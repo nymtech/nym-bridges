@@ -76,33 +76,62 @@ pub fn create_listener(options: &ServerConfig) -> Result<TlsAcceptor> {
 
 // ====================================[ Client Side ]====================================
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct ClientOptions {
-    /// Address describing the remote transport server
-    ///
-    /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
-    pub addresses: Vec<SocketAddr>,
+pub use crate::types::tls::ClientOptions;
 
-    /// Override hostname used for certificate verification
-    pub host: Option<String>,
+struct InnerClientOptions {
+        pub addresses: Vec<SocketAddr>,
+        pub host: Option<String>,
+        pub id_pubkey: VerifyingKey,
+}
 
-    /// Use identity public key to verify server self signed certificate base64 encoded
-    pub id_pubkey: String,
+impl TryFrom<&ClientOptions> for InnerClientOptions {
+    type Error = TransportError;
+    fn try_from(value: &ClientOptions) -> Result<Self, Self::Error> {
+        let id_pubkey = Self::parse_base64_pubkey(&value.id_pubkey)?;
+
+        Ok(Self {
+            addresses: value.addresses.clone(),
+            host: value.host.clone(),
+            id_pubkey,
+        })
+    }
+}
+
+impl InnerClientOptions {
+    fn parse_base64_pubkey(key: impl AsRef<str>) -> Result<VerifyingKey, TransportError> {
+        let mut pubkey_bytes = [0u8; 32];
+        BASE64_STANDARD
+            .decode_slice(key.as_ref(), &mut pubkey_bytes)
+            .map_err(|e| {
+                TransportError::config_err(format!(
+                    "failed to decode Quic bridge public key as base64: {e}"
+                ))
+            })?;
+        VerifyingKey::from_bytes(&pubkey_bytes)
+            .map_err(|e| TransportError::config_err(format!("bad Quic bridge public key: {e}")))
+    }
+
+    fn get_ipv4(&self) -> Option<SocketAddr> {
+        self.addresses.iter().find(|s| s.is_ipv4()).cloned()
+    }
 }
 
 pub async fn transport_conn(
     options: &ClientOptions,
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
     info!("initializing from transport identity pubkey");
+    let inner_options = InnerClientOptions::try_from(options)?;
+
+
     let mut bytes = [0u8; ed25519_dalek::PUBLIC_KEY_LENGTH];
-    BASE64_STANDARD.decode_slice(&options.id_pubkey, &mut bytes)?;
+    BASE64_STANDARD.decode_slice(&inner_options.id_pubkey, &mut bytes)?;
     let verif_key = VerifyingKey::from_bytes(&bytes)?;
 
     let crypto_provider = rustls::crypto::CryptoProvider::get_default()
         .unwrap_or(&Arc::new(rustls::crypto::ring::default_provider()))
         .clone();
 
-    let alt_names = options.host.clone().map(|h| vec![h]);
+    let alt_names = inner_options.host.clone().map(|h| vec![h]);
     let verifier = IdentityBasedVerifier::builder(&verif_key)
         .with_alt_names(alt_names)
         .with_crypto_provider(crypto_provider.clone())
@@ -122,11 +151,11 @@ pub async fn transport_conn(
     let connector = TlsConnector::from(Arc::new(client_crypto));
 
     // If no hostname is provided use the IP address of the remote server as the hostname.
-    let addr_host = options.addresses[0].ip().to_string();
-    let host = options.host.clone().unwrap_or(addr_host);
+    let addr_host = inner_options.addresses[0].ip().to_string();
+    let host = inner_options.host.clone().unwrap_or(addr_host);
     let sni = ServerName::try_from(host).unwrap();
 
-    let stream = TcpStream::connect(&options.addresses[..]).await?;
+    let stream = TcpStream::connect(&inner_options.addresses[..]).await?;
     connector
         .connect(sni, stream)
         .await

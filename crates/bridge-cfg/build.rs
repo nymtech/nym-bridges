@@ -6,6 +6,7 @@ use std::path::Path;
 fn main() {
     let default_bridge_cfg = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
+        .join("..")
         .join("bridges.template.toml");
     let mut default_bridge_cfg_file = std::fs::File::open(default_bridge_cfg).unwrap();
     let mut contents = String::new();

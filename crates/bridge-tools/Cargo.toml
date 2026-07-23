@@ -1,0 +1,88 @@
+[package]
+name = "bridge-tools"
+version = "0.2.0"
+edition = "2024"
+publish = false
+authors = ["Nym Technologies SA"]
+description = "Client and debugging utilities for Nym transport bridges."
+license = "AGPL-3.0-only"
+repository = "https://github.com/nymtech/nym-bridges"
+homepage = "https://nymtech.net"
+
+[[bin]]
+name = "client"
+path = "src/client.rs"
+
+[[bin]]
+name = "client-udp"
+path = "src/client_udp.rs"
+
+[[bin]]
+name = "udp-echo"
+path = "src/udp_echo.rs"
+
+[[bin]]
+name = "udp-recv"
+path = "src/udp_recv.rs"
+
+[[bin]]
+name = "udp-sender"
+path = "src/udp_sender.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+bs58.workspace = true
+bytes.workspace = true
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = { workspace = true, features = [
+	"pkcs8",
+	"alloc",
+	"pem",
+	"rand_core",
+] }
+getrandom = { workspace = true, default-features = false }
+hex.workspace = true
+lru-slab.workspace = true
+lazy_static.workspace = true
+once_cell.workspace = true
+pin-project-lite.workspace = true
+quinn-proto.workspace = true
+quinn.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+rcgen.workspace = true
+ring.workspace = true
+rustc-hash.workspace = true
+rustls = { workspace = true, default-features = false, features = [
+	"std",
+	"ring",
+	"logging",
+] }
+rustls-pki-types.workspace = true
+serde = { workspace = true, features = ["derive"] }
+slab.workspace = true
+socket2.workspace = true
+thiserror.workspace = true
+tinyvec = { workspace = true, features = ["alloc"] }
+tokio = { workspace = true, features = ["full"] }
+tokio-rustls = { workspace = true, default-features = false, features = [
+	"ring",
+	"tls12",
+	"logging",
+] }
+tokio-util = { workspace = true, features = ["full"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, default-features = false, features = [
+	"env-filter",
+	"fmt",
+	"ansi",
+	"time",
+	"local-time",
+] }
+uuid.workspace = true
+x509-parser = { workspace = true, features = ["verify"] }
+webpki-roots.workspace = true
+
+nym-bridges = { path = "../nym-bridges" }

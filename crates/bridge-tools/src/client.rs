@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     signal,
 };
 use tokio_util::sync::CancellationToken;
@@ -12,7 +12,6 @@ use tracing::*;
 use tracing::{error, info};
 
 use nym_bridges::config::{ClientConfig, PersistedClientConfig};
-use nym_bridges::connection::copy_bidirectional;
 use nym_bridges::transport::{quic, tls};
 
 #[derive(Debug, Parser, PartialEq)]
@@ -217,4 +216,54 @@ async fn process_tls<RW>(
     {
         info!("session to {ingress_addr} closed with error: {e}")
     }
+}
+
+
+
+pub async fn copy_bidirectional<IR, IS, ER, ES>(
+    token: CancellationToken,
+    ingress_addr: SocketAddr,
+    mut ingress_recv: IR,
+    mut ingress_send: IS,
+    mut egress_recv: ER,
+    mut egress_send: ES,
+) -> Result<()>
+where
+    IR: AsyncRead + Unpin + Send,
+    IS: AsyncWrite + Unpin + Send,
+    ER: AsyncRead + Unpin + Send,
+    ES: AsyncWrite + Unpin + Send,
+{
+    tokio::select! {
+        res = tokio::io::copy(&mut egress_recv, &mut ingress_send) => {
+            if let Err(e) = res {
+                error!("failed to copy: {e}");
+            } else {
+                debug!("connection {ingress_addr} closed");
+            }
+        }
+        res = tokio::io::copy(&mut ingress_recv, &mut egress_send) => {
+            if let Err(e) = res {
+                error!("failed to copy: {e}");
+            } else {
+                debug!("connection {ingress_addr} closed");
+            }
+        }
+        _ = token.cancelled() => {
+            debug!("closing connection from: {ingress_addr}");
+        }
+    }
+
+    ingress_send.flush().await.unwrap_or_else(|e| {
+        error!("failed to flush local connection on close: {}", e);
+    });
+    ingress_send.shutdown().await.unwrap_or_else(|e| {
+        error!("failed to close ingress connection: {}", e);
+    });
+    egress_send.shutdown().await.unwrap_or_else(|e| {
+        error!("failed to close egress connection: {}", e);
+    });
+
+    // Ok(session)
+    Ok(())
 }

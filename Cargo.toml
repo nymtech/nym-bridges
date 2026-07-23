@@ -2,11 +2,16 @@
 # [PROJECT_DIR]/Cargo.toml
 [workspace]
 resolver = "3"
-members = ["bridge-cfg", "nym-bridge", "bridge-tools"]
+members = [
+    "crates/nym-bridges-types",
+    "crates/nym-bridges",
+    "crates/bridge-cfg",
+    "crates/nym-bridge",
+    "crates/bridge-tools",
+]
 
-[package]
+[workspace.package]
 authors = ["Nym Technologies SA"]
-name = "nym-bridges"
 version = "0.2.0"
 edition = "2024"
 description = "Pluggable transport library for securing and obfuscating Nym VPN traffic."
@@ -14,15 +19,11 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/nymtech/nym-bridges"
 homepage = "https://nymtech.net"
 readme = "README.md"
-# Whitelist what ships in the published crate. The package root is the repo
-# root, so without this the tarball would also bundle test-env/ (which holds
-# private ed25519 and WireGuard keys) plus tests/, pkg/, Dockerfile and .github.
-include = ["src/**/*.rs", "/README.md", "/LICENSE"]
-
 
 [workspace.dependencies]
 anyhow = "1.0"
 base64 = "0.22.1"
+bip39 = "2.2"
 bs58 = "0.5.1"
 bytes = "1"
 clap = { version = "4", features = ["derive", "string"] }
@@ -52,7 +53,7 @@ quinn-proto = { version = "0.11", default-features = false, features = [
 rand = "0.10"
 rand_chacha = "0.10"
 rcgen = "0.14"
-reqwest = { version = "0.13.4",  default-features = false}
+reqwest = { version = "0.13.4", default-features = false }
 ring = "0.17"
 rustc-hash = "2"
 rustls = { version = "0.23.5", default-features = false, features = [
@@ -87,6 +88,8 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
     "time",
     "local-time",
 ] }
+ts-rs = "12.0.1"
+uniffi = { version = "=0.31.1", features = ["cli"] }
 uuid = "1.20"
 x509-parser = { version = "0.18", features = ["verify"] }
 webpki-roots = "1.0"
@@ -97,122 +100,8 @@ nym-config = "1.21.4"
 nym-bin-common = "1.21.4"
 
 
-[lib]
-name = "nym_bridges"
-path = "src/lib.rs"
-
-[dependencies]
-anyhow.workspace = true
-base64.workspace = true
-bs58.workspace = true
-bytes.workspace = true
-ed25519-dalek = { workspace=true, features = [
-    "pkcs8",
-    "alloc",
-    "pem",
-    "rand_core",
-] }
-futures.workspace = true
-getrandom = { workspace = true, default-features = false }
-hex.workspace = true
-lru-slab.workspace = true
-lazy_static.workspace = true
-once_cell.workspace = true
-pin-project-lite.workspace = true
-quinn-proto.workspace = true
-quinn.workspace = true
-rand = {workspace = true, features = ["thread_rng", "sys_rng"]}
-rcgen.workspace = true
-ring.workspace = true
-rustc-hash.workspace = true
-rustls = { workspace = true, default-features = false, features = [
-    "std",
-    "ring",
-    "logging",
-    "aws_lc_rs",
-] }
-rustls-pki-types.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-slab.workspace = true
-socket2.workspace = true
-thiserror.workspace = true
-tinyvec = { workspace = true, features = ["alloc"] }
-tokio = { workspace = true, features = ["full"] }
-tokio-rustls = { workspace = true, default-features = false, features = [
-    "ring",
-    "tls12",
-    "logging",
-] }
-tokio-util = { workspace = true, features = ["full"] }
-toml.workspace = true
-tracing.workspace = true
-uuid.workspace = true
-x509-parser = { workspace = true, features = ["verify"] }
-webpki-roots.workspace = true
-
-[dev-dependencies]
-tracing-subscriber = { workspace = true, default-features = false, features = [
-    "env-filter",
-    "fmt",
-    "ansi",
-    "time",
-    "local-time",
-] }
-tempfile.workspace = true
-
-[lints.rust]
+[workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(coverage,coverage_nightly)',
 ] }
 
-# ------------------------------------------------------------------------------
-# START DEBIAN PACKAGING
-#
-# Configurations for the cargo-deb cargo plugin which builds Debian packages in
-# target/debian/ when invoked with: cargo deb.
-#
-# Note that as the postinst script uses the adduser command we declare a
-# dependency on the adduser package to keep the lintian tool happy.
-#
-# See:
-#   - https://github.com/mmstick/cargo-deb
-#   - https://lintian.debian.org/tags/systemd-service-file-outside-lib.html
-#   - https://www.debian.org/doc/debian-policy/ch-files.html#behavior
-
-[package.metadata.deb]
-name = "nym-bridge"
-maintainer = "Nym Technologies SA <contact@nymtech.net>"
-priority = "optional"
-section = "net"
-license-file = ["LICENSE", "0"]
-extended-description-file = "pkg/doc/description.txt"
-depends = "$auto, adduser"
-maintainer-scripts = "pkg/debian/"
-copyright = "Copyright (c) 2025, Nym Technologies SA. All rights reserved."
-assets = [
-    [
-        "target/release/nym-bridge",
-        "/usr/bin/nym-bridge",
-        "755",
-    ],
-    [
-        "target/release/bridge-cfg",
-        "/usr/bin/bridge-cfg",
-        "755",
-    ],
-    [
-        "bridges.template.toml",
-        "/usr/share/doc/nym-bridge/bridges.template.toml",
-        "644",
-    ],
-    [
-        "pkg/doc/nym-bridge.1",
-        "/usr/share/man/man1/nym-bridge.1",
-        "644",
-    ],
-]
-systemd-units = { unit-name = "nym-bridge", stop-on-upgrade = true }
-
-# END DEBIAN PACKAGING
-# ------------------------------------------------------------------------------

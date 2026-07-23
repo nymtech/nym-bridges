@@ -40,6 +40,6 @@ reqwest = { workspace = true, default-features = false, features = [
 	"rustls",
 ] }
 
-nym-bridges = { path = "../" }
+nym-bridges = { path = "../nym-bridges" }
 nym-config.workspace = true
 nym-bin-common.workspace = true

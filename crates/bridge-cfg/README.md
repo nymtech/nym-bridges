@@ -82,31 +82,31 @@ chown -R nym:nym /etc/nym/keys
 We can run a dry run on a test `nym-node` configuration to generate a compatible configuration
 that can be used for the [`nym-bridge`](../nym-bridge/) runner.
 
-`bridge-cfg --gen -n bridge-cfg/test/config.toml -d bridge-cfg/test --dry-run`
+`bridge-cfg --gen -n crates/bridge-cfg/test/config.toml -d crates/bridge-cfg/test --dry-run`
 
 * `--gen` - Generate key material if it doesn't already exist. If this is not specified the tool assumes key material already exists, returning an error if the pre-existing key material is not found. 
-* `-d bridge-cfg/test` - Treat the `bridge-cfg/test` directory as our output directory for generated files.
+* `-d crates/bridge-cfg/test` - Treat the `crates/bridge-cfg/test` directory as our output directory for generated files.
 * `--dry-run` - Print the resulting `nym-bridge` config with indications of the changes as compared to the original WITHOUT writing it to file. 
-* `-n bridge-cfg/test/config.toml` - use the example Nym node config at `bridge-cfg/test/config.toml`. If not specified the configuration tool will first check the default nym-node config path, falling back to defaults it it does not find
+* `-n crates/bridge-cfg/test/config.toml` - use the example Nym node config at `crates/bridge-cfg/test/config.toml`. If not specified the configuration tool will first check the default nym-node config path, falling back to defaults it it does not find
 the config in the expected location.
 
 This will result in the following output:
 
 ```diff
- > "bridge-cfg/test/config.toml":
+ > "crates/bridge-cfg/test/config.toml":
 ...
 - bridge_client_params = '/home/nym/.nym/nym-nodes/default-nym-node/config/client_bridge_params.json'
-+ bridge_client_params = "bridge-cfg/test/client_bridge_params.json
++ bridge_client_params = "crates/bridge-cfg/test/client_bridge_params.json
 ...
 
- > "bridge-cfg/test/client_bridge_params.json":
+ > "crates/bridge-cfg/test/client_bridge_params.json":
 + {"version":"0.0.0","transports":[{"transport_type":"quic_plain","args":{"addresses":["192.168.0.1:4443","[fe80::1]:4443"],"host":null,"id_pubkey":"lmv/PMS1MQ0G71hUljt6BWpLhvBK1DyiozEF7Ux/HPo="}}]}
 
- > "bridge-cfg/test/bridges.toml":
+ > "crates/bridge-cfg/test/bridges.toml":
   # Nym Bridge Gateway Runner Configuration
 ...
 - client_params_path = "/etc/nym/default-nym-node/client_bridge_params.json"
-+ client_params_path = "bridge-cfg/test/client_bridge_params.json"
++ client_params_path = "crates/bridge-cfg/test/client_bridge_params.json"
 ...
 
   # Target address where client traffic will be forwarded.
@@ -124,7 +124,7 @@ This will result in the following output:
   
   # (UDP) Socket address to listen on
   listen = "[::]:4443"
-+ private_ed25519_identity_key_file = "bridge-cfg/test/keys/ed25519_bridge_identity.pem"
++ private_ed25519_identity_key_file = "crates/bridge-cfg/test/keys/ed25519_bridge_identity.pem"
 ...
 ```
 

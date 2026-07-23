@@ -6,6 +6,9 @@ pub mod transport;
 // mod stats;
 pub mod forward;
 
+extern crate nym_bridges_types;
+use nym_bridges_types as types;
+
 #[allow(unused)]
 #[cfg(test)]
 pub(crate) mod test_utils {

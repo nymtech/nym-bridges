@@ -73,35 +73,8 @@ impl PersistedServerConfig {
 
 // ====================================[ Client Side ]====================================
 
-// pub trait Named {
-//     fn name() -> String;
-// }
 
-// pub trait Versioned {
-//     fn version() -> String;
-// }
-
-// pub trait Persistable: Serialize + Deserialize + Versioned {}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-#[serde(tag = "transport_type", content = "args")]
-#[serde(rename_all = "snake_case")]
-pub enum ClientConfig {
-    QuicPlain(quic::ClientOptions),
-    TlsPlain(tls::ClientOptions),
-}
-
-impl From<quic::ClientOptions> for ClientConfig {
-    fn from(value: quic::ClientOptions) -> Self {
-        ClientConfig::QuicPlain(value)
-    }
-}
-
-impl From<tls::ClientOptions> for ClientConfig {
-    fn from(value: tls::ClientOptions) -> Self {
-        ClientConfig::TlsPlain(value)
-    }
-}
+pub use crate::types::ClientConfig;
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub struct PersistedClientConfig {
