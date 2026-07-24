@@ -1,6 +1,34 @@
-//! Nym Bridge Types
+// Copyright 2025 - Nym Technologies SA <contact@nymtech.net>
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Minimal compatible Types shared between [`nym-bridges`](https://docs.rs/nym-bridges) and other crates.
 //!
+//! ## Abstract
 //!
+//! - This crate contains all types necessary for interaction with crates (nym-vpn-lib-types) and others
+//! - Types visible via bindings should contain proper attributes and feature gated to `uniffi-bindings` for uniffi, `typescript-bindings` for TypeScript bindings.
+//! - TypeScript bindings use serde for conversion from Rust to TS and feature-gated to `typescript-bindings`. Camel case is preferred for compatibility with TypeScript/Tauri.
+//! - Be mindful of limitations of TypeScript and uniffi limitations. Keep exported types simple.
+//!
+//! ## Dependency considerations
+//!
+//! Please keep direct dependencies to other crates to a minimum to avoid dependency conflicts which can happen, especially when using it in other large projects such as Tauri.
+
+//! ## Supported bindings
+//!
+//! 1. [uniffi](https://mozilla.github.io/uniffi-rs/latest/) bindings (feature flag: uniffi-bindings). The following limitations apply:
+//! - Namespaces are not supported, all exported types should have unique names.
+//! - Not all types are supported or can be bridged. Keep exported types simple.
+//!
+//! 2. TypeScript bindings using [ts-rs](https://docs.rs/ts-rs) (feature flag: typescript-bindings). Serialization (using serde) uses camelCase for compatibility with TypeScript/Tauri.
+//!    Run the following command to generate TypeScript bindings:
+//!    ```sh
+//!    cargo test -p nym-vpn-lib-types -F typescript-bindings
+//!    ```
+//!
+//! ## Serde support
+//!
+//! Serde can be enabled using `serde` feature flag. Note that TypeScript adds camelCase transformation for keys. Do not mix both feature flags in the same workspace.
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

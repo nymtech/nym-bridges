@@ -20,6 +20,10 @@ pub(crate) fn make_socket(addr: Option<SocketAddr>) -> std::io::Result<std::net:
     Ok(socket)
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[allow(non_snake_case)]
+pub fn SOCKET_OPEN_NOP(_: RawFd) {}
+
 pub struct BridgeConn {
     /// Configured parameters from which this bridge connections was built
     #[allow(unused)] // we will want these later for metrics tracking
