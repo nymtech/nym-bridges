@@ -73,37 +73,30 @@ impl PersistedServerConfig {
 
 // ====================================[ Client Side ]====================================
 
-pub use crate::types::ClientConfig;
+pub use crate::types::{ClientConfig, PersistedClientConfig};
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
-pub struct PersistedClientConfig {
-    pub version: String,
-    pub transports: Vec<ClientConfig>,
+pub fn parse_persisted_config_json(config_str: impl AsRef<str>) -> Result<PersistedClientConfig> {
+    serde_json::from_str(config_str.as_ref()).context("failed to parse config")
+}
+
+pub fn parse_persisted_config(config_str: impl AsRef<str>) -> Result<PersistedClientConfig> {
+    toml::from_str(config_str.as_ref()).context("failed to parse config")
 }
 
 #[allow(unused)]
-impl PersistedClientConfig {
-    pub fn parse_json(config_str: impl AsRef<str>) -> Result<Self> {
-        serde_json::from_str(config_str.as_ref()).context("failed to parse config")
-    }
+fn parse_json_file(config_path: PathBuf) -> Result<PersistedClientConfig> {
+    let mut config_file = fs::File::open(config_path)?;
+    let mut config_str = String::new();
+    config_file.read_to_string(&mut config_str)?;
+    parse_persisted_config_json(config_str)
+}
 
-    pub fn parse_json_file(config_path: PathBuf) -> Result<Self> {
-        let mut config_file = fs::File::open(config_path)?;
-        let mut config_str = String::new();
-        config_file.read_to_string(&mut config_str)?;
-        Self::parse_json(config_str)
-    }
-
-    pub fn parse(config_str: impl AsRef<str>) -> Result<Self> {
-        toml::from_str(config_str.as_ref()).context("failed to parse config")
-    }
-
-    pub fn parse_file(config_path: PathBuf) -> Result<Self> {
-        let mut config_file = fs::File::open(config_path)?;
-        let mut config_str = String::new();
-        config_file.read_to_string(&mut config_str)?;
-        Self::parse(config_str)
-    }
+#[allow(unused)]
+fn parse_file(config_path: PathBuf) -> Result<PersistedClientConfig> {
+    let mut config_file = fs::File::open(config_path)?;
+    let mut config_str = String::new();
+    config_file.read_to_string(&mut config_str)?;
+    parse_persisted_config(config_str)
 }
 
 impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
@@ -231,7 +224,7 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
 
         let serialized_cfg = toml::to_string(&cfg)?;
 
-        let parsed_cfg = PersistedClientConfig::parse(serialized_cfg)?;
+        let parsed_cfg = parse_persisted_config(serialized_cfg)?;
 
         assert_eq!(cfg, parsed_cfg);
         Ok(())

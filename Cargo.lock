@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-cfg"
-version = "0.2.0"
+version = "0.2.0-rc.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-tools"
-version = "0.2.0"
+version = "0.2.0-rc.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1451,7 +1451,7 @@ dependencies = [
 
 [[package]]
 name = "nym-bridge"
-version = "0.2.0"
+version = "0.2.0-rc.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "nym-bridges"
-version = "0.2.0"
+version = "0.2.0-rc.1"
 dependencies = [
  "anyhow",
  "base64",

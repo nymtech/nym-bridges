@@ -33,36 +33,20 @@ uniffi::custom_type!(SocketAddr, String, {
 #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
 pub struct PersistedClientConfig {
     pub version: String,
-    pub transports: Vec<PersistedTransportConfig>,
+    pub transports: Vec<ClientConfig>,
 }
 
 impl PersistedClientConfig {
     pub fn get_addrs(&self) -> Vec<SocketAddr> {
         let mut addrs = Vec::new();
         for transport in &self.transports {
-            match &transport.config {
+            match transport {
                 ClientConfig::QuicPlain(params) => addrs.extend(&params.addresses),
                 ClientConfig::TlsPlain(params) => addrs.extend(&params.addresses),
             }
         }
         addrs
     }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
-#[cfg_attr(
-    feature = "typescript-bindings",
-    derive(TS),
-    ts(export),
-    ts(export_to = "bindings.ts")
-)]
-#[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
-pub struct PersistedTransportConfig {
-    pub name: String,
-    pub version: String,
-    pub config: ClientConfig,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -76,6 +60,7 @@ pub struct PersistedTransportConfig {
     ts(export_to = "bindings.ts")
 )]
 #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
+#[cfg_attr(not(feature = "typescript-bindings"), serde(rename_all = "snake_case"))]
 pub enum ClientConfig {
     QuicPlain(quic::ClientOptions),
     TlsPlain(tls::ClientOptions),

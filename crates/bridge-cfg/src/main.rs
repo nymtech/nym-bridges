@@ -505,12 +505,14 @@ mod tests {
 
         // Parse the JSON to verify structure
         let parsed: serde_json::Value = serde_json::from_str(&client_json).unwrap();
+        debug!("{client_json}");
 
         // Verify version
         assert_eq!(parsed["version"], "0");
 
         // Verify transport type
         assert_eq!(parsed["transports"][0]["transport_type"], "quic_plain");
+
 
         // Verify addresses contain our test IPs
         let addresses = &parsed["transports"][0]["args"]["addresses"];
@@ -549,8 +551,8 @@ mod tests {
 pub(crate) mod test {
     use super::*;
     use nym_bridges::config::{
-        ClientConfig, ForwardConfig, PersistedClientConfig, PersistedServerConfig,
-        TransportServerConfig,
+        ClientConfig, ForwardConfig, PersistedServerConfig,
+        TransportServerConfig, parse_persisted_config_json,
     };
     use std::env;
     use std::str::FromStr;
@@ -644,7 +646,7 @@ pub(crate) mod test {
 
         // check some key fields in the client config
         let client_params_out =
-            PersistedClientConfig::parse_json(bridge_client_cfg.serialize().unwrap()).unwrap();
+            parse_persisted_config_json(bridge_client_cfg.serialize().unwrap()).unwrap();
         client_params_out
             .transports
             .iter()
@@ -770,7 +772,7 @@ pub(crate) mod test {
             });
 
         let client_params_out =
-            PersistedClientConfig::parse_json(bridge_client_cfg.serialize().unwrap()).unwrap();
+            parse_persisted_config_json(bridge_client_cfg.serialize().unwrap()).unwrap();
         client_params_out
             .transports
             .iter()

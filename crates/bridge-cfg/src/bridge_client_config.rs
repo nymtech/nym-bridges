@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use nym_bridges::config::{
     self, PersistedClientConfig, PersistedServerConfig, TransportServerConfig,
+    parse_persisted_config,
 };
 
 use crate::bridge_config::BridgeConfig;
@@ -20,7 +21,7 @@ impl BridgeClientConfig {
     pub fn parse(config_str: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
             // TODO: this will try to parse toml, not json
-            inner: PersistedClientConfig::parse(config_str)?,
+            inner: parse_persisted_config(config_str)?,
         })
     }
 
