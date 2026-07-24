@@ -15,7 +15,7 @@ cargo deb -p nym-bridge
 
 ```sh
 # Pick the newest built nym-bridge package artifact
-DEB="$(ls -1t target/debian/nym-bridge_*_amd64.deb | head -n1)"
+DEB="$(/usr/bin/ls -1t target/debian/nym-bridge_*_amd64.deb | head -n1)"
 
 # Check Debian best practices
 lintian "$DEB"
