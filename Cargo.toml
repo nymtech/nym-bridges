@@ -12,7 +12,7 @@ members = [
 
 [workspace.package]
 authors = ["Nym Technologies SA"]
-version = "0.2.0"
+version = "0.2.0-rc.1"
 edition = "2024"
 description = "Pluggable transport library for securing and obfuscating Nym VPN traffic."
 license = "AGPL-3.0-only"
