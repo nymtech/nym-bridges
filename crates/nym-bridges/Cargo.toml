@@ -43,7 +43,6 @@ ed25519-dalek = { workspace = true, features = [
 ] }
 futures.workspace = true
 getrandom = { workspace = true, default-features = false }
-hex.workspace = true
 lru-slab.workspace = true
 lazy_static.workspace = true
 once_cell.workspace = true
@@ -92,4 +91,4 @@ tracing-subscriber = { workspace = true, default-features = false, features = [
     "local-time",
 ] }
 tempfile.workspace = true
-
+hex.workspace = true
