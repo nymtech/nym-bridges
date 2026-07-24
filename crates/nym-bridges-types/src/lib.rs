@@ -31,7 +31,10 @@ uniffi::custom_type!(SocketAddr, String, {
     ts(export_to = "bindings.ts")
 )]
 #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
-#[cfg_attr(not(feature = "typescript-bindings"), serde(rename_all = "snake_case"))]
+#[cfg_attr(
+    all(feature = "serde", not(feature = "typescript-bindings")),
+    serde(rename_all = "snake_case")
+)]
 pub struct PersistedClientConfig {
     pub version: String,
     pub transports: Vec<ClientConfig>,
@@ -61,7 +64,10 @@ impl PersistedClientConfig {
     ts(export_to = "bindings.ts")
 )]
 #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
-#[cfg_attr(not(feature = "typescript-bindings"), serde(rename_all = "snake_case"))]
+#[cfg_attr(
+    all(feature = "serde", not(feature = "typescript-bindings")),
+    serde(rename_all = "snake_case")
+)]
 pub enum ClientConfig {
     QuicPlain(quic::ClientOptions),
     TlsPlain(tls::ClientOptions),
@@ -97,7 +103,10 @@ pub mod quic {
         ts(export_to = "bindings.ts")
     )]
     #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
-    #[cfg_attr(not(feature = "typescript-bindings"), serde(rename_all = "snake_case"))]
+    #[cfg_attr(
+        all(feature = "serde", not(feature = "typescript-bindings")),
+        serde(rename_all = "snake_case")
+    )]
     pub struct QuicPlainClientOptions {
         /// Address describing the remote transport server. This is a vec to support multiple addresses
         /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
@@ -134,7 +143,10 @@ pub mod tls {
         ts(export_to = "bindings.ts")
     )]
     #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
-    #[cfg_attr(not(feature = "typescript-bindings"), serde(rename_all = "snake_case"))]
+    #[cfg_attr(
+        all(feature = "serde", not(feature = "typescript-bindings")),
+        serde(rename_all = "snake_case")
+    )]
     pub struct TlsPlainClientOptions {
         /// Address describing the remote transport server. This is a vec to support multiple addresses
         /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
