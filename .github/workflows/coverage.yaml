@@ -25,7 +25,7 @@ jobs:
 
       - name: Generate code coverage
         id: coverage
-        run: cargo llvm-cov --all-features -p nym-bridges -p bridge-cfg --no-fail-fast --lcov --output-path lcov.info
+        run: cargo llvm-cov -p nym-bridges -p bridge-cfg --no-fail-fast --lcov --output-path lcov.info
         env:
           NODE_COVERALLS_DEBUG: true
 

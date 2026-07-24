@@ -31,6 +31,7 @@ uniffi::custom_type!(SocketAddr, String, {
     ts(export_to = "bindings.ts")
 )]
 #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
+#[cfg_attr(not(feature = "typescript-bindings"), serde(rename_all = "snake_case"))]
 pub struct PersistedClientConfig {
     pub version: String,
     pub transports: Vec<ClientConfig>,
@@ -96,6 +97,7 @@ pub mod quic {
         ts(export_to = "bindings.ts")
     )]
     #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
+    #[cfg_attr(not(feature = "typescript-bindings"), serde(rename_all = "snake_case"))]
     pub struct QuicPlainClientOptions {
         /// Address describing the remote transport server. This is a vec to support multiple addresses
         /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
@@ -132,6 +134,7 @@ pub mod tls {
         ts(export_to = "bindings.ts")
     )]
     #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
+    #[cfg_attr(not(feature = "typescript-bindings"), serde(rename_all = "snake_case"))]
     pub struct TlsPlainClientOptions {
         /// Address describing the remote transport server. This is a vec to support multiple addresses
         /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
@@ -148,4 +151,52 @@ pub mod tls {
     }
 
     pub type ClientOptions = TlsPlainClientOptions;
+}
+
+#[cfg(test)]
+mod test {
+    const RAW_V0_CLIENT_CONFIG: &str = r#"{"version":"0","transports":[{"transport_type":"quic_plain","args":{"addresses":["139.162.33.226:4443","[2400:8901::2000:faff:fea6:87f2]:4443"],"host":"netdna.bootstrapcdn.com","id_pubkey":"9JC91ZiszhIn3n4FG+MDYE/lYwhGdpHGWQTKUqGl+sE="}}]}"#;
+
+    #[test]
+    fn ensure_v0_parsing_compatibility() -> Result<(), Box<dyn std::error::Error>> {
+        // Parse the JSON to verify structure
+        let parsed: serde_json::Value = serde_json::from_str(RAW_V0_CLIENT_CONFIG)?;
+
+        // Verify version
+        assert_eq!(parsed["version"], "0");
+
+        // Verify transport type
+        assert_eq!(parsed["transports"][0]["transport_type"], "quic_plain");
+
+        // Verify addresses contain our test IPs
+        let addresses = &parsed["transports"][0]["args"]["addresses"];
+        assert!(addresses.is_array());
+
+        let address_strings: Vec<String> = addresses
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        // Should contain both IPv4 and IPv6 addresses with port 4443
+        assert!(
+            address_strings
+                .iter()
+                .any(|addr| addr.contains("139.162.33.226:4443"))
+        );
+        assert!(
+            address_strings
+                .iter()
+                .any(|addr| addr.contains("[2400:8901::2000:faff:fea6:87f2]:4443"))
+        );
+
+        // Verify host field
+        assert_eq!(
+            parsed["transports"][0]["args"]["host"],
+            "netdna.bootstrapcdn.com"
+        );
+
+        Ok(())
+    }
 }

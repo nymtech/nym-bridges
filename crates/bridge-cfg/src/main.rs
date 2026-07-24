@@ -505,14 +505,12 @@ mod tests {
 
         // Parse the JSON to verify structure
         let parsed: serde_json::Value = serde_json::from_str(&client_json).unwrap();
-        debug!("{client_json}");
 
         // Verify version
         assert_eq!(parsed["version"], "0");
 
         // Verify transport type
         assert_eq!(parsed["transports"][0]["transport_type"], "quic_plain");
-
 
         // Verify addresses contain our test IPs
         let addresses = &parsed["transports"][0]["args"]["addresses"];
@@ -551,8 +549,8 @@ mod tests {
 pub(crate) mod test {
     use super::*;
     use nym_bridges::config::{
-        ClientConfig, ForwardConfig, PersistedServerConfig,
-        TransportServerConfig, parse_persisted_config_json,
+        ClientConfig, ForwardConfig, PersistedServerConfig, TransportServerConfig,
+        parse_persisted_config_json,
     };
     use std::env;
     use std::str::FromStr;
