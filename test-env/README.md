@@ -78,8 +78,8 @@ nym-bridge -c /etc/nym/default-nym-node/server.toml
 # alternatively the forwarding client using TLS can be run using the following.
 # note, based on config this binds the same port as the quic config so one of them
 # must be modified if they are to be run at the same time.
-client-udp --config /etc/nym/default_nym_node/client_quic.toml
-client-udp --config /etc/nym/default_nym_node/client_tls.toml
+client-udp --config /etc/nym/default-nym-node/client_quic.toml
+client-udp --config /etc/nym/default-nym-node/client_tls.toml
 
 # in wg0 container -- open a tcp connection to kick off the layered wrapped tunnel to the netcat tcp listener on the server
 nc -vvv 10.0.1.2 9999

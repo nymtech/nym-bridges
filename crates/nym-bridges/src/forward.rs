@@ -1,6 +1,30 @@
+//! UDP forwarding between a local application socket and a bridge transport
+//! connection.
+//!
+//! A forwarder always has two ends: a "forward" (egress) UDP socket facing the
+//! wrapped application traffic, and a "transport" side (a
+//! [`BridgeConn`](crate::connection::BridgeConn) or a per-session stream)
+//! facing the bridge. There are two roles, split into the
+//! [`initiator`](crate::forward::initiator) and
+//! [`responder`](crate::forward::responder) submodules:
+//!
+//! - [`initiator`](crate::forward::initiator) runs on the side that owns a
+//!   dedicated UDP socket per connection and does not yet know its peer's
+//!   address; it learns the peer address from the first datagram it forwards,
+//!   then `connect()`s the socket to it.
+//! - [`responder`](crate::forward::responder) runs on the side whose UDP
+//!   socket is shared across many sessions, so the peer address is already
+//!   known (from the [`Session`](crate::session::Session)) and every datagram
+//!   must be explicitly addressed and filtered by source.
+//!
+//! Both roles share the same steady-state forwarding loop (`udp_to_transport_task`
+//! and `transport_to_udp_task`), parameterized over a `UdpPeer` trait so the
+//! connected-vs-shared socket difference doesn't have to be duplicated.
+
 use std::{
+    future::Future,
     io,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
@@ -20,13 +44,269 @@ use crate::connection::BridgeConn;
 use crate::connection::make_socket;
 use crate::error::TransportError;
 
+/// Standard Ethernet II MTU, used to size per-datagram receive buffers.
 const ETHERNET_V2_MTU: u16 = 1500;
+/// Width, in bytes, of the length prefix used to frame datagrams over the
+/// transport connection.
 const LENGTH_DELIMITER_BYTELEN: usize = 2;
+/// How long [`initiator::process_udp`] waits for the first datagram (used to
+/// discover the peer address) before giving up.
 const INITIAL_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Distinguishes how a forwarder's UDP socket should receive and send datagrams,
+/// so the shared task loops below can be reused across both use cases.
+trait UdpPeer: Send + Sync + 'static {
+    /// Receive a single datagram, returning its length and source address.
+    async fn recv(
+        &self,
+        sock: &UdpSocket,
+        buf: &mut BytesMut,
+        fwd_addr: SocketAddr,
+    ) -> io::Result<(usize, SocketAddr)>;
+
+    /// Send `data` to `dest`.
+    async fn send(&self, sock: &UdpSocket, data: &[u8], dest: SocketAddr) -> io::Result<usize>;
+}
+
+/// The socket has already had `connect()` called against `fwd_addr`, so the kernel
+/// only delivers datagrams from that peer -- used by [`initiator`], where each
+/// forwarder owns a dedicated socket for the lifetime of one connection.
+struct ConnectedPeer;
+
+impl UdpPeer for ConnectedPeer {
+    async fn recv(
+        &self,
+        sock: &UdpSocket,
+        buf: &mut BytesMut,
+        fwd_addr: SocketAddr,
+    ) -> io::Result<(usize, SocketAddr)> {
+        let len = sock.recv_buf(buf).await?;
+        Ok((len, fwd_addr))
+    }
+
+    async fn send(&self, sock: &UdpSocket, data: &[u8], _dest: SocketAddr) -> io::Result<usize> {
+        sock.send(data).await
+    }
+}
+
+/// The socket is shared across multiple peer sessions, so datagrams must be
+/// explicitly addressed and filtered by source -- used by [`responder`], where one
+/// socket multiplexes many sessions.
+struct SharedPeer;
+
+impl UdpPeer for SharedPeer {
+    async fn recv(
+        &self,
+        sock: &UdpSocket,
+        buf: &mut BytesMut,
+        _fwd_addr: SocketAddr,
+    ) -> io::Result<(usize, SocketAddr)> {
+        sock.recv_buf_from(buf).await
+    }
+
+    async fn send(&self, sock: &UdpSocket, data: &[u8], dest: SocketAddr) -> io::Result<usize> {
+        sock.send_to(data, dest).await
+    }
+}
+
+/// Compares two socket addresses for equality, treating an IPv4 address and its
+/// IPv4-mapped IPv6 equivalent as the same peer.
+fn address_match(original: SocketAddr, incoming: SocketAddr) -> bool {
+    if incoming == original {
+        true
+    } else {
+        match (original.ip(), incoming.ip()) {
+            (IpAddr::V4(orig), IpAddr::V6(_)) => {
+                SocketAddr::from((orig.to_ipv6_mapped(), original.port())) == incoming
+            }
+            (IpAddr::V6(_), IpAddr::V4(inc)) => {
+                original == SocketAddr::from((inc.to_ipv6_mapped(), incoming.port()))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Forwards datagrams received on `sock` to the transport side, framed with a
+/// length prefix, until `token` is cancelled or an I/O error occurs.
+///
+/// Datagrams from any address other than `fwd_addr` are silently dropped.
+/// `tr_label` is only used for tracing (it identifies the transport side of
+/// the forward in log lines, since it may not have a `SocketAddr` of its own).
+///
+/// Assumes `peer` matches how `sock` was set up (connected vs. shared). On
+/// error, this only reports the error upward -- it does not cancel `token`
+/// itself; pair it with [`transport_to_udp_task`] via [`run_forward_pair`],
+/// which is the single place responsible for cancelling the sibling task.
+async fn udp_to_transport_task<W, P, TL>(
+    peer: P,
+    sock: Arc<UdpSocket>,
+    mut framed_writer: W,
+    fwd_addr: SocketAddr,
+    tr_label: TL,
+    mtu: u16,
+    token: CancellationToken,
+) -> Result<(), io::Error>
+where
+    W: Sink<bytes::Bytes, Error = io::Error> + Unpin + Send,
+    P: UdpPeer,
+    TL: std::fmt::Display,
+{
+    // allocate buffers of mtu size, and take ownership to ensure they can't be resized anymore
+    let mut dn_buf = BytesMut::with_capacity(mtu as usize);
+
+    loop {
+        tokio::select! {
+            res = peer.recv(&sock, &mut dn_buf, fwd_addr) => {
+                let (len, src) = res.map_err(|e| {
+                    error!("error receiving from forward socket: {e}");
+                    e
+                })?;
+
+                if !address_match(fwd_addr, src) {
+                    debug!("received {len}B from alt addr {src} -- ignoring");
+                    //reset the buffer without any new allocations.
+                    dn_buf.clear();
+                    if !dn_buf.try_reclaim(mtu as usize) {
+                        warn!("unable to reclaim bytes in buffer: {} ", dn_buf.capacity());
+                    }
+                    continue;
+                }
+
+                trace!(" <-{fwd_addr} read {len}B");
+                framed_writer.send(dn_buf.copy_to_bytes(len)).await.map_err(|e| {
+                    error!("error sending to transport connection: {e}");
+                    e
+                })?;
+                trace!(" {tr_label}<- wrote {len}B");
+
+                //reset the buffer without any new allocations.
+                dn_buf.clear();
+                if !dn_buf.try_reclaim(mtu as usize) {
+                    warn!("unable to reclaim bytes in buffer: {} ", dn_buf.capacity());
+                }
+            }
+            _ = token.cancelled() => {
+                debug!("end io copy from {fwd_addr}<->{tr_label}");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Forwards length-prefixed frames read from `framed_reader` out to `fwd_addr`
+/// on `sock`, until `token` is cancelled or an I/O error occurs.
+///
+/// A frame larger than a single datagram is sent as multiple UDP writes.
+/// `tr_label` is only used for tracing, see [`udp_to_transport_task`].
+///
+/// Assumes `peer` matches how `sock` was set up (connected vs. shared). On
+/// error, this only reports the error upward -- see [`run_forward_pair`] for
+/// how sibling-task cancellation is handled.
+async fn transport_to_udp_task<R, P, TL>(
+    peer: P,
+    mut framed_reader: R,
+    sock: Arc<UdpSocket>,
+    fwd_addr: SocketAddr,
+    tr_label: TL,
+    token: CancellationToken,
+) -> Result<(), io::Error>
+where
+    R: Stream<Item = Result<bytes::BytesMut, io::Error>> + Unpin + Send,
+    P: UdpPeer,
+    TL: std::fmt::Display,
+{
+    loop {
+        tokio::select! {
+            res = framed_reader.next() => {
+                match res {
+                    None => {
+                        info!("connection closed");
+                        break;
+                    }
+                    Some(Ok(buf)) => {
+                        let len = buf.len();
+                        trace!("{tr_label}-> read {len}B");
+                        let mut sent = 0;
+                        let mut sends = 1;
+                        while sent < len {
+                            let len_sent = peer.send(&sock, &buf[sent..len], fwd_addr).await.map_err(|e| {
+                                error!("error sending to egress socket: {e}");
+                                e
+                            })?;
+                            sent += len_sent;
+                            trace!(" ->{fwd_addr} wrote {len_sent}B {sends} send");
+                            sends +=1;
+                        }
+                    }
+                    Some(Err(e)) => {
+                        error!("error reading from transport conn: {e}");
+                        return Err(e);
+                    }
+                }
+            }
+            _ = token.cancelled() => {
+                debug!("end io copy from {fwd_addr}<->{tr_label}");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Runs `recv_task` and `send_task` (the two halves of a forwarder spawned by
+/// [`initiator::process_udp`] or [`responder::process_udp`]) concurrently, and
+/// cancels `token` as soon as either one exits -- for any reason, success or
+/// error -- so the other stops too.
+///
+/// This is the single place responsible for cross-task cancellation: the task
+/// futures themselves only need to react to `token` being cancelled (via their
+/// `token.cancelled()` select branch), never to cancel it. Callers must give
+/// each task future its own clone of the *same* `token` passed here -- an
+/// independent child token would not be affected by the cancellation this
+/// function performs, defeating the purpose.
+async fn run_forward_pair<F1, F2>(recv_task: F1, send_task: F2, token: CancellationToken)
+where
+    F1: Future<Output = Result<(), io::Error>> + Send + 'static,
+    F2: Future<Output = Result<(), io::Error>> + Send + 'static,
+{
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(recv_task);
+    tasks.spawn(send_task);
+
+    let mut token = Some(token);
+
+    // Wait for both tasks to complete; if either one exits, make sure to cancel the other as well.
+    while let Some(res) = tasks.join_next().await {
+        if let Err(err) = res {
+            error!("bridge udp forwarder join error: {err}");
+        } else if let Ok(Err(err)) = res {
+            error!("bridge udp forwarder error: {err}");
+        }
+
+        // Cancel all tasks if any of sub-tasks exit for any reason
+        if let Some(token) = token.take() {
+            token.cancel();
+        }
+    }
+}
+
+/// Entry point for launching the initiator side of a UDP forwarder.
+///
+/// See the [module docs](self) for how this relates to [`responder`].
 pub struct UdpForwarder {}
 
 impl UdpForwarder {
+    /// Binds a fresh UDP socket and spawns a background task that forwards
+    /// datagrams between it and `egress_conn`, learning the peer address from
+    /// the first datagram received (see [`initiator::process_udp`]).
+    ///
+    /// Returns the local address the socket is bound to (so the caller can
+    /// hand it to whatever local application should send/receive on it) and a
+    /// handle to the spawned forwarding task. If `close_tx` is provided, a
+    /// message is sent on it once the forwarder shuts down. `token` cancels
+    /// the forwarder early.
     pub async fn launch_initiator(
         egress_conn: BridgeConn,
         bind_addr: Option<SocketAddr>,
@@ -57,9 +337,21 @@ impl UdpForwarder {
     }
 }
 
+/// The side of a forwarder that owns a dedicated UDP socket per connection and
+/// does not yet know its peer's address.
 pub mod initiator {
     use super::*;
 
+    /// Drives a single UDP forwarder over `sock` and the transport `reader`/`writer`.
+    ///
+    /// Blocks (without spawning) until either the first datagram is received on
+    /// `sock` -- establishing the peer address the socket then `connect()`s to
+    /// -- or `INITIAL_CONNECTION_TIMEOUT` elapses / `token` is cancelled, in
+    /// which case the function returns having done nothing further. Once the
+    /// peer address is established, spawns the steady-state forwarding tasks
+    /// and runs until either side exits or `token` is cancelled, cancelling the
+    /// other task in turn. `close_tx`, if provided, is signalled once the
+    /// forwarder has shut down.
     pub async fn process_udp<R, W>(
         reader: R,
         writer: W,
@@ -133,36 +425,27 @@ pub mod initiator {
             return;
         }
 
-        let mut tasks = tokio::task::JoinSet::new();
-        tasks.spawn(udp_to_transport_task(
-            sock.clone(),
-            framed_writer,
-            fwd_addr,
-            mtu,
-            token.child_token(),
-        ));
-        tasks.spawn(transport_to_udp_task(
-            framed_reader,
-            sock.clone(),
-            fwd_addr,
-            token.child_token(),
-        ));
-
-        let mut token = Some(token);
-
-        // Wait for both tasks to complete, if either one exits, make sure to cancel the other as well.
-        while let Some(res) = tasks.join_next().await {
-            if let Err(err) = res {
-                tracing::error!("bridge udp forwarder join error: {err}");
-            } else if let Ok(Err(err)) = res {
-                tracing::error!("bridge udp forwarder error: {err}");
-            }
-
-            // Cancel all tasks if any of sub-tasks exit for any reason
-            if let Some(token) = token.take() {
-                token.cancel();
-            }
-        }
+        run_forward_pair(
+            udp_to_transport_task(
+                ConnectedPeer,
+                sock.clone(),
+                framed_writer,
+                fwd_addr,
+                "[tr]",
+                mtu,
+                token.clone(),
+            ),
+            transport_to_udp_task(
+                ConnectedPeer,
+                framed_reader,
+                sock.clone(),
+                fwd_addr,
+                "[tr]",
+                token.clone(),
+            ),
+            token,
+        )
+        .await;
 
         if let Some(tx) = close_tx {
             tx.send(()).ok();
@@ -170,105 +453,25 @@ pub mod initiator {
 
         info!("transport udp forwarder shutdown");
     }
-
-    // Assumes that the socket has already had `connect` called.
-    async fn udp_to_transport_task<W>(
-        sock: Arc<UdpSocket>,
-        mut framed_writer: W,
-        fwd_addr: SocketAddr,
-        mtu: u16,
-        token: CancellationToken,
-    ) -> Result<(), io::Error>
-    where
-        W: Sink<bytes::Bytes, Error = io::Error> + Unpin + Send,
-    {
-        // allocate buffers of mtu size, and take ownership to ensure they can't be resized anymore
-        let mut dn_buf = BytesMut::with_capacity(mtu as usize);
-
-        loop {
-            tokio::select! {
-                res = sock.recv_buf(&mut dn_buf) => {
-                    let len = res.map_err(|e| {
-                        error!("error receiving from forward socket: {e}");
-                        e
-                    })?;
-
-                    trace!(" <-{fwd_addr} read {len}B");
-                    framed_writer.send(dn_buf.copy_to_bytes(len)).await.map_err(|e| {
-                        error!("error sending to transport connection: {e}");
-                        e
-                    })?;
-                    trace!(" [tr]<- wrote {len}B");
-
-                    //reset the buffer without any new allocations.
-                    dn_buf.clear();
-                    if !dn_buf.try_reclaim(mtu as usize) {
-                        warn!("unable to reclaim bytes in buffer: {} ", dn_buf.capacity());
-                    }
-                }
-                _ = token.cancelled() => {
-                    debug!("end io copy from {fwd_addr}<->[tr]");
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    // Assumes that the socket has already had `connect` called.
-    async fn transport_to_udp_task<R>(
-        mut framed_reader: R,
-        sock: Arc<UdpSocket>,
-        fwd_addr: SocketAddr,
-        token: CancellationToken,
-    ) -> Result<(), io::Error>
-    where
-        R: Stream<Item = Result<bytes::BytesMut, io::Error>> + Unpin + Send,
-    {
-        loop {
-            tokio::select! {
-                res = framed_reader.next() => {
-                    match res {
-                        None => {
-                            info!("connection closed");
-                            break;
-                        }
-                        Some(Ok(buf)) => {
-                            let len = buf.len();
-                            trace!("[tr]-> read {len}B");
-                            let mut sent = 0;
-                            let mut sends = 1;
-                            while sent < len {
-                                let len_sent = sock.send(&buf[sent..len]).await.map_err(|e| {
-                                    error!("error sending to egress socket: {e}");
-                                    e
-                                })?;
-                                sent += len_sent;
-                                trace!(" ->{fwd_addr} wrote {len_sent}B {sends} send");
-                                sends +=1;
-                            }
-                        }
-                        Some(Err(e)) => {
-                            error!("error reading from transport conn: {e}");
-                            return Err(e);
-                        }
-                    }
-                }
-                _ = token.cancelled() => {
-                    debug!("end io copy");
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
+/// The side of a forwarder whose UDP socket is shared across many sessions, so
+/// the peer address is already known and every datagram must be filtered by
+/// source address.
 pub mod responder {
     use super::*;
     use crate::session::Session;
-    use std::net::IpAddr;
 
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::ReadBuf;
+
+    /// Drives a single UDP forwarder for `session` over the shared `sock` and
+    /// the transport `rd`/`wr`.
+    ///
+    /// Unlike [`initiator::process_udp`], both peer addresses are already known
+    /// (from `session`), so this immediately spawns the steady-state forwarding
+    /// tasks and waits for both to complete or `token` to be cancelled.
     pub async fn process_udp<R, W>(
         rd: R,
         wr: W,
@@ -286,160 +489,40 @@ pub mod responder {
         let local_fw_addr = sock.local_addr().unwrap();
         info!("starting udp forward {tr_addr:?}->([tr_local] -> {local_fw_addr:?}) -> {fw_addr:?}");
 
-        let mut tasks = tokio::task::JoinSet::new();
+        let framed_writer = LengthDelimitedCodec::builder()
+            .length_field_length(LENGTH_DELIMITER_BYTELEN)
+            .new_write(LoggingIo::new(wr, "".into()));
+        let framed_reader = LengthDelimitedCodec::builder()
+            .length_field_length(LENGTH_DELIMITER_BYTELEN)
+            .new_read(LoggingIo::new(rd, "".into()));
 
-        tasks.spawn(udp_to_transport_task(
-            sock.clone(),
-            wr,
-            fw_addr,
-            tr_addr,
-            mtu,
-            token.clone(),
-        ));
-        tasks.spawn(transport_to_udp_task(
-            rd,
-            sock.clone(),
-            fw_addr,
-            tr_addr,
-            token.clone(),
-        ));
-
-        // Wait for both tasks to complete
-        let _ = tasks.join_all().await;
+        run_forward_pair(
+            udp_to_transport_task(
+                SharedPeer,
+                sock.clone(),
+                framed_writer,
+                fw_addr,
+                tr_addr,
+                mtu,
+                token.clone(),
+            ),
+            transport_to_udp_task(
+                SharedPeer,
+                framed_reader,
+                sock.clone(),
+                fw_addr,
+                tr_addr,
+                token.clone(),
+            ),
+            token,
+        )
+        .await;
 
         drop(sock);
     }
 
-    async fn udp_to_transport_task<W>(
-        sock: Arc<UdpSocket>,
-        wr: W,
-        fw_addr: SocketAddr,
-        tr_addr: SocketAddr,
-        mtu: u16,
-        token: CancellationToken,
-    ) -> Result<(), io::Error>
-    where
-        W: AsyncWrite + Unpin + Send,
-    {
-        // allocate buffers of mtu size, and take ownership to ensure they can't be resized anymore
-        // let up_buf = &mut vec![0u8; mtu as usize].into_boxed_slice()[..];
-        let mut dn_buf = BytesMut::with_capacity(mtu as usize);
-
-        let mut wrf = LengthDelimitedCodec::builder()
-            .length_field_length(2)
-            .new_write(LoggingIo::new(wr, "".into()));
-
-        loop {
-            tokio::select! {
-                res = sock.recv_buf_from(&mut dn_buf) => {
-                    let (len, src) = res.map_err(|e| {
-                        error!("error receiving from forward socket: {e}");
-                        token.cancel();
-                        e
-                    })?;
-
-                    if !address_match(fw_addr, src) {
-                        debug!("received {len}B from alt addr {src} -- ignoring");
-                        continue;
-                    }
-
-                    trace!(" <-{fw_addr} read {len}B");
-                    wrf.send(dn_buf.copy_to_bytes(len)).await.map_err(|e| {
-                        error!("error sending to transport connection: {e}");
-                        token.cancel();
-                        e
-                    })?;
-                    trace!(" {tr_addr}<- wrote {len}B");
-
-                    //reset the buffer without any new allocations.
-                    dn_buf.clear();
-                    if !dn_buf.try_reclaim(mtu as usize) {
-                        warn!("unable to reclaim bytes in buffer: {} ", dn_buf.capacity());
-                    }
-                }
-                _ = token.cancelled() => {
-                    debug!("end io copy from {fw_addr}<->{tr_addr}");
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn transport_to_udp_task<R>(
-        rd: R,
-        sock: Arc<UdpSocket>,
-        fw_addr: SocketAddr,
-        tr_addr: SocketAddr,
-        token: CancellationToken,
-    ) -> Result<(), io::Error>
-    where
-        R: AsyncRead + Unpin + Send,
-    {
-        let mut rdf = LengthDelimitedCodec::builder()
-            .length_field_length(2)
-            .new_read(LoggingIo::new(rd, "".into()));
-
-        loop {
-            tokio::select! {
-                res = rdf.next() => {
-                    match res {
-                        None => {
-                            info!("connection closed");
-                            break;
-                        }
-                        Some(Ok(buf)) => {
-                            let len = buf.len();
-                            trace!("{tr_addr}-> read {len}B");
-                            let mut sent = 0;
-                            let mut sends = 1;
-                            while sent < len {
-                                let len_sent = sock.send_to(&buf[sent..len], fw_addr).await.map_err(|e| {
-                                    error!("error sending to egress socket: {e}");
-                                    token.cancel();
-                                    e
-                                })?;
-                                sent += len_sent;
-                                trace!(" ->{fw_addr} wrote {len_sent}B {sends} send");
-                                sends +=1;
-                            }
-                        }
-                        Some(Err(e)) => {
-                            error!("error reading from transport conn: {e}");
-                            token.cancel();
-                            return Err(e);
-                        }
-                    }
-                }
-                _ = token.cancelled() => {
-                    debug!("end io copy from {fw_addr}<->{tr_addr}");
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn address_match(original: SocketAddr, incoming: SocketAddr) -> bool {
-        if incoming == original {
-            true
-        } else {
-            match (original.ip(), incoming.ip()) {
-                (IpAddr::V4(orig), IpAddr::V6(_)) => {
-                    SocketAddr::from((orig.to_ipv6_mapped(), original.port())) == incoming
-                }
-                (IpAddr::V6(_), IpAddr::V4(inc)) => {
-                    original == SocketAddr::from((inc.to_ipv6_mapped(), incoming.port()))
-                }
-                _ => false,
-            }
-        }
-    }
-
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-    use tokio::io::ReadBuf;
-
+    /// Wraps an [`AsyncRead`]/[`AsyncWrite`] to trace the number of bytes read
+    /// and written, tagged with `name`.
     struct LoggingIo<T> {
         inner: T,
         name: String,
