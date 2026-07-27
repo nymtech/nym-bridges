@@ -9,7 +9,7 @@ use tracing::*;
 use std::{io::Read, net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 
 use nym_bridges::config::{ClientConfig, PersistedClientConfig};
-use nym_bridges::forward::process_udp;
+use nym_bridges::forward::initiator::process_udp;
 use nym_bridges::session::Session;
 use nym_bridges::transport::{quic, tls};
 

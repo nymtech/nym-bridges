@@ -13,7 +13,7 @@ use std::sync::Once;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use nym_bridges::forward::process_udp;
+use nym_bridges::forward::initiator::process_udp;
 // use nym_bridges::session::Session;
 
 mod sender;

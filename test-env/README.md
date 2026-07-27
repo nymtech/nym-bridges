@@ -45,7 +45,7 @@ tcpdump -i wg0 -n -v
 # wg0
 
 # listen on tcp port 9999
-nc -lv 9999
+nc -lv -p 9999
 ```
 
 
@@ -64,7 +64,7 @@ nc 10.0.0.1 9999
 
 ```sh
 # in wg1 container -- listen on tcp:9999 for incoming test connection
-nc -lv 9999
+nc -lv -p 9999
 
 
 # in wg1 container -- run the server side of the connection forwarder
