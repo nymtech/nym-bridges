@@ -22,7 +22,7 @@ include = ["src/**/*.rs", "/README.md", "/LICENSE"]
 
 [workspace.dependencies]
 anyhow = "1.0"
-base64 = "0.22.1"
+base64 = "0.23.0"
 bs58 = "0.5.1"
 bytes = "1"
 clap = { version = "4", features = ["derive", "string"] }
