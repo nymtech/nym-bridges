@@ -1,7 +1,15 @@
 [package]
 name = "nym-bridges-types"
-version = "0.1.0"
-edition = "2024"
+description = "Cross platform type support for Nym VPN pluggable transport library."
+readme = "README.md"
+
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [features]
 uniffi-bindings = ["dep:uniffi"]

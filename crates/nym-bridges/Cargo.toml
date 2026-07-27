@@ -1,15 +1,17 @@
 
 [package]
 name = "nym-bridges"
-
-authors = ["Nym Technologies SA"]
-version = "0.2.0-rc.1"
-edition = "2024"
 description = "Pluggable transport library for securing and obfuscating Nym VPN traffic."
-license = "AGPL-3.0-only"
-repository = "https://github.com/nymtech/nym-bridges"
-homepage = "https://nymtech.net"
-readme = "README.md"
+readme = "../README.md"
+
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+
 # Whitelist what ships in the published crate. The package root is the repo
 # root, so without this the tarball would also bundle test-env/ (which holds
 # private ed25519 and WireGuard keys) plus tests/, pkg/, Dockerfile and .github.
