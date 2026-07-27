@@ -1,13 +1,16 @@
 [package]
 name = "bridge-tools"
-version = "0.2.0-rc.1"
-edition = "2024"
-publish = false
-authors = ["Nym Technologies SA"]
 description = "Client and debugging utilities for Nym transport bridges."
-license = "AGPL-3.0-only"
-repository = "https://github.com/nymtech/nym-bridges"
-homepage = "https://nymtech.net"
+readme = "README.md"
+publish = false
+
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "client"

@@ -14,11 +14,12 @@ members = [
 authors = ["Nym Technologies SA"]
 version = "0.2.0-rc.1"
 edition = "2024"
-description = "Pluggable transport library for securing and obfuscating Nym VPN traffic."
-license = "AGPL-3.0-only"
 repository = "https://github.com/nymtech/nym-bridges"
 homepage = "https://nymtech.net"
-readme = "README.md"
+documentation = "https://nymtech.net"
+license = "GPL-3.0-only"
+rust-version = "1.95"
+
 
 [workspace.dependencies]
 anyhow = "1.0"
