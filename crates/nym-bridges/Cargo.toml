@@ -2,7 +2,7 @@
 [package]
 name = "nym-bridges"
 description = "Pluggable transport library for securing and obfuscating Nym VPN traffic."
-readme = "../README.md"
+readme = "../../README.md"
 
 version.workspace = true
 authors.workspace = true
@@ -15,7 +15,7 @@ license.workspace = true
 # Whitelist what ships in the published crate. The package root is the repo
 # root, so without this the tarball would also bundle test-env/ (which holds
 # private ed25519 and WireGuard keys) plus tests/, pkg/, Dockerfile and .github.
-include = ["src/**/*.rs", "/README.md", "/LICENSE"]
+include = ["src/**/*.rs", "/README.md"]
 
 
 
@@ -81,7 +81,7 @@ uuid.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
 webpki-roots.workspace = true
 
-nym-bridges-types = { path = "../nym-bridges-types" }
+nym-bridges-types = { path = "../nym-bridges-types", version = "0.2.0-rc.1" }
 
 
 [dev-dependencies]
