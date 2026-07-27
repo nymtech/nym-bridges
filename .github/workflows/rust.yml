@@ -42,7 +42,7 @@ jobs:
       run: rustup component add clippy --toolchain nightly
 
     - name: Lint
-      run: cargo clippy --workspace --all-targets --verbose --all-features
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings  
 
   test-stable:
     name: Test 32/64 bit stable
@@ -65,8 +65,8 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - run: rustup target add ${{ matrix.target }}
     - run: ${{ matrix.deps }}
-    - run: cargo test --target ${{ matrix.target }} --workspace --all-targets --all-features
-  # - run: cargo test --target ${{ matrix.target }} --workspace --all-targets
+    - run: cargo test --target ${{ matrix.target }} -p nym-bridges -p nym-bridges-types --all-targets --all-features
+    - run: cargo test --target ${{ matrix.target }} --workspace --all-targets
   # - run: cargo test --target ${{ matrix.target }} --workspace --all-targets --no-default-features
 
   test-nightly:
@@ -96,16 +96,3 @@ jobs:
     # Build library and binaries
     - name: Build library and bins
       run: cargo build --workspace --all-targets
-
-      #    - name: Install cargo-llvm-cov
-      #      uses: taiki-e/install-action@cargo-llvm-cov
-      #    - name: Generate code coverage
-      #      run: cargo llvm-cov --all-features --workspace --codecov --output-path codecov.json
-      #    - name: Codecov
-      #      uses: codecov/codecov-action@v4.0.1
-      #      with:
-      #        fail_ci_if_error: true
-      #        files: codecov.json
-      #        token: ${{ secrets.CODECOV_TOKEN }} # required
-      #        verbose: true
-      #        slug: nymtech/nym-bridges

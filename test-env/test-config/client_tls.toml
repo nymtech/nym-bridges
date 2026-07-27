@@ -2,12 +2,14 @@
 
 ingress_addr = "[::1]:8080"
 
-[[transports]]
+[transport_cfg]
+version = "0"
 
-[transports.transport]
-transport_type = "tls_plain"
+[[transport_cfg.transports]]
 
-[transports.transport.args]
-address = "192.168.100.3:4443"
-host = "tls-test.domain.com"
+transport_type = "quic_plain"
+
+[transport_cfg.transports.args]
+addresses = ["192.168.100.3:4433"]
 id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="
+host = "tls-test.domain.com"

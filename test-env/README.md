@@ -45,7 +45,7 @@ tcpdump -i wg0 -n -v
 # wg0
 
 # listen on tcp port 9999
-nc -lv 9999
+nc -lv -p 9999
 ```
 
 
@@ -64,7 +64,7 @@ nc 10.0.0.1 9999
 
 ```sh
 # in wg1 container -- listen on tcp:9999 for incoming test connection
-nc -lv 9999
+nc -lv -p 9999
 
 
 # in wg1 container -- run the server side of the connection forwarder
@@ -78,8 +78,8 @@ nym-bridge -c /etc/nym/default-nym-node/server.toml
 # alternatively the forwarding client using TLS can be run using the following.
 # note, based on config this binds the same port as the quic config so one of them
 # must be modified if they are to be run at the same time.
-client-udp --config /etc/nym/default_nym_node/client_quic.toml
-client-udp --config /etc/nym/default_nym_node/client_tls.toml
+client-udp --config /etc/nym/default-nym-node/client_quic.toml
+client-udp --config /etc/nym/default-nym-node/client_tls.toml
 
 # in wg0 container -- open a tcp connection to kick off the layered wrapped tunnel to the netcat tcp listener on the server
 nc -vvv 10.0.1.2 9999

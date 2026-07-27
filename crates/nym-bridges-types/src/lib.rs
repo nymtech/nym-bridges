@@ -1,0 +1,242 @@
+// Copyright 2025 - Nym Technologies SA <contact@nymtech.net>
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Minimal compatible Types shared between [`nym-bridges`](https://docs.rs/nym-bridges) and other crates.
+//!
+//! ## Abstract
+//!
+//! - This crate contains all types necessary for interaction with crates (nym-vpn-lib-types) and others
+//! - Types visible via bindings should contain proper attributes and feature gated to `uniffi-bindings` for uniffi, `typescript-bindings` for TypeScript bindings.
+//! - TypeScript bindings use serde for conversion from Rust to TS and feature-gated to `typescript-bindings`. Camel case is preferred for compatibility with TypeScript/Tauri.
+//! - Be mindful of limitations of TypeScript and uniffi limitations. Keep exported types simple.
+//!
+//! ## Dependency considerations
+//!
+//! Please keep direct dependencies to other crates to a minimum to avoid dependency conflicts which can happen, especially when using it in other large projects such as Tauri.
+
+//! ## Supported bindings
+//!
+//! 1. [uniffi](https://mozilla.github.io/uniffi-rs/latest/) bindings (feature flag: uniffi-bindings). The following limitations apply:
+//! - Namespaces are not supported, all exported types should have unique names.
+//! - Not all types are supported or can be bridged. Keep exported types simple.
+//!
+//! 2. TypeScript bindings using [ts-rs](https://docs.rs/ts-rs) (feature flag: typescript-bindings). Serialization (using serde) uses camelCase for compatibility with TypeScript/Tauri.
+//!    Run the following command to generate TypeScript bindings:
+//!    ```sh
+//!    cargo test -p nym-vpn-lib-types -F typescript-bindings
+//!    ```
+//!
+//! ## Serde support
+//!
+//! Serde can be enabled using `serde` feature flag. Note that TypeScript adds camelCase transformation for keys. Do not mix both feature flags in the same workspace.
+
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "typescript-bindings")]
+use ts_rs::TS;
+
+#[cfg(feature = "uniffi-bindings")]
+uniffi::setup_scaffolding!();
+
+use std::net::SocketAddr;
+#[cfg(feature = "uniffi-bindings")]
+use std::str::FromStr;
+#[cfg(feature = "uniffi-bindings")]
+uniffi::custom_type!(SocketAddr, String, {
+    remote,
+    try_lift: |val| Ok(SocketAddr::from_str(&val)?),
+    lower: |val| val.to_string()
+});
+
+#[derive(Debug, PartialEq, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+#[cfg_attr(
+    feature = "typescript-bindings",
+    derive(TS),
+    ts(export),
+    ts(export_to = "bindings.ts")
+)]
+#[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+    all(feature = "serde", not(feature = "typescript-bindings")),
+    serde(rename_all = "snake_case")
+)]
+pub struct PersistedClientConfig {
+    pub version: String,
+    pub transports: Vec<ClientConfig>,
+}
+
+impl PersistedClientConfig {
+    pub fn get_addrs(&self) -> Vec<SocketAddr> {
+        let mut addrs = Vec::new();
+        for transport in &self.transports {
+            match transport {
+                ClientConfig::QuicPlain(params) => addrs.extend(&params.addresses),
+                ClientConfig::TlsPlain(params) => addrs.extend(&params.addresses),
+            }
+        }
+        addrs
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "transport_type", content = "args"))]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Enum))]
+#[cfg_attr(
+    feature = "typescript-bindings",
+    derive(TS),
+    ts(export),
+    ts(export_to = "bindings.ts")
+)]
+#[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+    all(feature = "serde", not(feature = "typescript-bindings")),
+    serde(rename_all = "snake_case")
+)]
+pub enum ClientConfig {
+    QuicPlain(quic::ClientOptions),
+    TlsPlain(tls::ClientOptions),
+}
+
+impl From<quic::ClientOptions> for ClientConfig {
+    fn from(value: quic::ClientOptions) -> Self {
+        ClientConfig::QuicPlain(value)
+    }
+}
+
+impl From<tls::ClientOptions> for ClientConfig {
+    fn from(value: tls::ClientOptions) -> Self {
+        ClientConfig::TlsPlain(value)
+    }
+}
+
+pub mod quic {
+    #[cfg(feature = "serde")]
+    use serde::{Deserialize, Serialize};
+    use std::net::SocketAddr;
+
+    #[cfg(feature = "typescript-bindings")]
+    use ts_rs::TS;
+
+    #[derive(Debug, PartialEq, Clone)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+    #[cfg_attr(
+        feature = "typescript-bindings",
+        derive(TS),
+        ts(export),
+        ts(export_to = "bindings.ts")
+    )]
+    #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
+    #[cfg_attr(
+        all(feature = "serde", not(feature = "typescript-bindings")),
+        serde(rename_all = "snake_case")
+    )]
+    pub struct QuicPlainClientOptions {
+        /// Address describing the remote transport server. This is a vec to support multiple addresses
+        /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
+        /// as the key material should not be used across multiple instances.
+        ///
+        /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
+        pub addresses: Vec<SocketAddr>,
+
+        /// Override hostname used for certificate verification
+        pub host: Option<String>,
+
+        /// Use identity public key to verify server self signed certificate
+        pub id_pubkey: String,
+    }
+
+    pub type ClientOptions = QuicPlainClientOptions;
+}
+
+pub mod tls {
+    #[cfg(feature = "serde")]
+    use serde::{Deserialize, Serialize};
+    use std::net::SocketAddr;
+
+    #[cfg(feature = "typescript-bindings")]
+    use ts_rs::TS;
+
+    #[derive(Debug, PartialEq, Clone)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+    #[cfg_attr(
+        feature = "typescript-bindings",
+        derive(TS),
+        ts(export),
+        ts(export_to = "bindings.ts")
+    )]
+    #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
+    #[cfg_attr(
+        all(feature = "serde", not(feature = "typescript-bindings")),
+        serde(rename_all = "snake_case")
+    )]
+    pub struct TlsPlainClientOptions {
+        /// Address describing the remote transport server. This is a vec to support multiple addresses
+        /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
+        /// as the key material should not be used across multiple instances.
+        ///
+        /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
+        pub addresses: Vec<SocketAddr>,
+
+        /// Override hostname used for certificate verification
+        pub host: Option<String>,
+
+        /// Use identity public key to verify server self signed certificate base64 encoded
+        pub id_pubkey: String,
+    }
+
+    pub type ClientOptions = TlsPlainClientOptions;
+}
+
+#[cfg(test)]
+mod test {
+    const RAW_V0_CLIENT_CONFIG: &str = r#"{"version":"0","transports":[{"transport_type":"quic_plain","args":{"addresses":["139.162.33.226:4443","[2400:8901::2000:faff:fea6:87f2]:4443"],"host":"netdna.bootstrapcdn.com","id_pubkey":"9JC91ZiszhIn3n4FG+MDYE/lYwhGdpHGWQTKUqGl+sE="}}]}"#;
+
+    #[test]
+    fn ensure_v0_parsing_compatibility() -> Result<(), Box<dyn std::error::Error>> {
+        // Parse the JSON to verify structure
+        let parsed: serde_json::Value = serde_json::from_str(RAW_V0_CLIENT_CONFIG)?;
+
+        // Verify version
+        assert_eq!(parsed["version"], "0");
+
+        // Verify transport type
+        assert_eq!(parsed["transports"][0]["transport_type"], "quic_plain");
+
+        // Verify addresses contain our test IPs
+        let addresses = &parsed["transports"][0]["args"]["addresses"];
+        assert!(addresses.is_array());
+
+        let address_strings: Vec<String> = addresses
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        // Should contain both IPv4 and IPv6 addresses with port 4443
+        assert!(
+            address_strings
+                .iter()
+                .any(|addr| addr.contains("139.162.33.226:4443"))
+        );
+        assert!(
+            address_strings
+                .iter()
+                .any(|addr| addr.contains("[2400:8901::2000:faff:fea6:87f2]:4443"))
+        );
+
+        // Verify host field
+        assert_eq!(
+            parsed["transports"][0]["args"]["host"],
+            "netdna.bootstrapcdn.com"
+        );
+
+        Ok(())
+    }
+}

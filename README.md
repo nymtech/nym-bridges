@@ -15,7 +15,7 @@
 
 This repository implements and provides tooling for a pluggable transport system used to secure and
 obfuscate [Nym VPN](https://github.com/nymtech/nym-vpn-client/) traffic. The
-[nym-bridge](./nym-bridge/) is a server-side transparent forwarder accepting and unwrapping
+[nym-bridge](./crates/nym-bridge/) is a server-side transparent forwarder accepting and unwrapping
 obfuscated traffic to be passed on to a colocated [nym-node](https://github.com/nymtech/nym) entry
 gateway.
 
@@ -43,9 +43,9 @@ cargo build --release -p nym-bridge -p bridge-cfg
 
 #### Automatic Configuration
 
-The [`bridge-cfg`](../bridge-cfg/) tool is provided to assist with key generation and configuration
+The [`bridge-cfg`](./crates/bridge-cfg/) tool is provided to assist with key generation and configuration
 management -- for more details on automatic configuration see
-[`bridge-cfg/README.md`](../bridge-cfg/README.md).
+[`crates/bridge-cfg/README.md`](./crates/bridge-cfg/README.md).
 
 This tool assumes that the `nym-bridge` is going to be run alongside a `nym-node`, but attempts to configure expected defaults if a nym-node config is not present.
 
@@ -75,7 +75,7 @@ sudo chmod 600 /etc/nym/keys/*
 bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml
 ```
 
-Manual configuration instructions can be found in [`nym-bridge/README.md`](./nym-bridge/README.md)
+Manual configuration instructions can be found in [`crates/nym-bridge/README.md`](./crates/nym-bridge/README.md)
 
 #### Usage
 
@@ -110,7 +110,7 @@ This tool uses ed25519 keys to sign certificates for the TLS handshake. The publ
 ## Testing
 
 A minimal docker test environment is provided for testing the tunneling and connection handling of
-the nym-bridge binaries. The [`bridge-tools`](./bridge-tools/) are intended for use in this
+the nym-bridge binaries. The [`bridge-tools`](./crates/bridge-tools/) are intended for use in this
 environment.
 
 See [`./test-env/`](./test-env/) for more details. 

@@ -1,0 +1,45 @@
+[package]
+name = "bridge-cfg"
+version = "0.2.0-rc.1"
+edition = "2024"
+publish = false
+authors = ["Nym Technologies SA"]
+description = "Configuration tooling for Nym transport bridges."
+license = "AGPL-3.0-only"
+repository = "https://github.com/nymtech/nym-bridges"
+homepage = "https://nymtech.net"
+
+[dependencies]
+
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive", "string"] }
+ed25519-dalek = { workspace = true, features = [
+	"pkcs8",
+	"alloc",
+	"pem",
+	"rand_core",
+] }
+rand = {workspace = true, features = ["thread_rng", "sys_rng"]}
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+similar.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, default-features = false, features = [
+	"env-filter",
+	"fmt",
+	"ansi",
+	"time",
+	"local-time",
+] }
+toml_edit.workspace = true
+tempdir.workspace = true
+reqwest = { workspace = true, default-features = false, features = [
+	"json",
+	"blocking",
+	"rustls",
+] }
+
+nym-bridges = { path = "../nym-bridges" }
+nym-config.workspace = true
+nym-bin-common.workspace = true

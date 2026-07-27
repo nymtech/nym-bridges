@@ -1,30 +1,32 @@
-FROM ubuntu:22.04 AS base
+FROM ubuntu:24.04 AS base
 
 RUN apt-get update && \
     apt-get install -y wireguard iproute2 iputils-ping gcc-multilib && \
-    apt-get install -y netcat tcpdump vim && \
+    apt-get install -y netcat-traditional tcpdump vim && \
     mkdir -p /etc/wireguard /etc/nym/default-nym-node/bridges
 
 
-FROM rust:1.88 AS builder
+FROM rust:1.96 AS builder
 WORKDIR /usr/src/nym-bridges
 
-RUN mkdir -p src/ nym-bridge/src bridge-tools/src bridge-cfg/src
+RUN mkdir -p crates/nym-bridges/src/ crates/nym-bridges-types/src/ crates/nym-bridge/src crates/bridge-tools/src crates/bridge-cfg/src
 
 COPY Cargo.toml Cargo.toml
-COPY nym-bridge/Cargo.toml nym-bridge/Cargo.toml
-COPY bridge-tools/Cargo.toml bridge-tools/Cargo.toml
-COPY bridge-cfg/Cargo.toml bridge-cfg/Cargo.toml
+COPY crates/nym-bridges-types/Cargo.toml crates/nym-bridges-types/Cargo.toml
+COPY crates/nym-bridges/Cargo.toml crates/nym-bridges/Cargo.toml
+COPY crates/nym-bridge/Cargo.toml crates/nym-bridge/Cargo.toml
+COPY crates/bridge-tools/Cargo.toml crates/bridge-tools/Cargo.toml
+COPY crates/bridge-cfg/Cargo.toml crates/bridge-cfg/Cargo.toml
 
 # add dummy target files to build all dependencies 
-RUN echo "fn main() {println!(\"if you see this, the udp_echo build broke\")}" > bridge-tools/src/udp_echo.rs
-RUN echo "fn main() {println!(\"if you see this, the client build broke\")}" > bridge-tools/src/client.rs
-RUN echo "fn main() {println!(\"if you see this, the client_udp build broke\")}" > bridge-tools/src/client_udp.rs
-RUN echo "fn main() {println!(\"if you see this, the udp_sender build broke\")}" > bridge-tools/src/udp_sender.rs
-RUN echo "fn main() {println!(\"if you see this, the udp_recv build broke\")}" > bridge-tools/src/udp_recv.rs
-RUN echo "fn main() {println!(\"if you see this, the bridge runner build broke\")}" > nym-bridge/src/main.rs
-RUN echo "fn main() {println!(\"if you see this, the bridge config build broke\")}" > bridge-cfg/src/main.rs
-RUN touch src/lib.rs
+RUN echo "fn main() {println!(\"if you see this, the udp_echo build broke\")}" > crates/bridge-tools/src/udp_echo.rs
+RUN echo "fn main() {println!(\"if you see this, the client build broke\")}" > crates/bridge-tools/src/client.rs
+RUN echo "fn main() {println!(\"if you see this, the client_udp build broke\")}" > crates/bridge-tools/src/client_udp.rs
+RUN echo "fn main() {println!(\"if you see this, the udp_sender build broke\")}" > crates/bridge-tools/src/udp_sender.rs
+RUN echo "fn main() {println!(\"if you see this, the udp_recv build broke\")}" > crates/bridge-tools/src/udp_recv.rs
+RUN echo "fn main() {println!(\"if you see this, the bridge runner build broke\")}" > crates/nym-bridge/src/main.rs
+RUN echo "fn main() {println!(\"if you see this, the bridge config build broke\")}" > crates/bridge-cfg/src/main.rs
+RUN touch crates/nym-bridges/src/lib.rs crates/nym-bridges-types/src/lib.rs
 
 RUN cargo build --workspace --all-targets --release
 
@@ -39,23 +41,16 @@ RUN rm -f target/release/deps/udp_echo*
 RUN rm -f target/release/deps/nym_bridges* target/release/libnym_bridges* target/release/deps/libnym_bridges*
 
 # add in actual source now so rebuild starts from here on change
-RUN rm -rf src/ nym-bridge/src bridge-tools/src bridge-cfg/src
-RUN mkdir -p src/ nym-bridge/src bridge-tools/src bridge-cfg/src
-
-COPY src/ src/
+RUN rm -rf crates
+COPY crates/ crates/
 
 COPY bridges.template.toml .
-COPY bridge-cfg/build.rs bridge-cfg/
-COPY bridge-cfg/src/ bridge-cfg/src/
-
-COPY bridge-tools/src/ bridge-tools/src/
-COPY nym-bridge/src/ nym-bridge/src/
 
 RUN cargo build --workspace --all-targets --release
 
-RUN cargo install --path bridge-cfg
-RUN cargo install --path bridge-tools
-RUN cargo install --path nym-bridge
+RUN cargo install --path crates/bridge-cfg
+RUN cargo install --path crates/bridge-tools
+RUN cargo install --path crates/nym-bridge
 
 
 FROM base AS wg0
