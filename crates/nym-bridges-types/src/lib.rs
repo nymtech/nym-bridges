@@ -7,7 +7,7 @@
 //!
 //! - This crate contains all types necessary for interaction with crates (nym-vpn-lib-types) and others
 //! - Types visible via bindings should contain proper attributes and feature gated to `uniffi-bindings` for uniffi, `typescript-bindings` for TypeScript bindings.
-//! - TypeScript bindings use serde for conversion from Rust to TS and feature-gated to `typescript-bindings`. Camel case is preferred for compatibility with TypeScript/Tauri.
+//! - TypeScript bindings use serde for conversion from Rust to TS and feature-gated to `typescript-bindings`.
 //! - Be mindful of limitations of TypeScript and uniffi limitations. Keep exported types simple.
 //!
 //! ## Dependency considerations
@@ -20,8 +20,8 @@
 //! - Namespaces are not supported, all exported types should have unique names.
 //! - Not all types are supported or can be bridged. Keep exported types simple.
 //!
-//! 2. TypeScript bindings using [ts-rs](https://docs.rs/ts-rs) (feature flag: typescript-bindings). Serialization (using serde) uses snake_case because initial version of
-//! the configs for deployed in mainnet bridges use snake_case. This will likely be fixed in a future version of the config types.
+//! 2. TypeScript bindings using [ts-rs](https://docs.rs/ts-rs) (feature flag: `typescript-bindings`). Serialization ([using serde](https://docs.rs/serde)) uses `snake_case`.
+//! 
 //!    Run the following command to generate TypeScript bindings:
 //!    ```sh
 //!    cargo test -p nym-vpn-lib-types -F typescript-bindings
@@ -29,7 +29,7 @@
 //!
 //! ## Serde support
 //!
-//! Serde can be enabled using `serde` feature flag. Note that TypeScript adds camelCase transformation for keys. Do not mix both feature flags in the same workspace.
+//! Serde can be enabled using `serde` feature flag. 
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

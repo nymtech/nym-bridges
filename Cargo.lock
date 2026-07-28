@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-cfg"
-version = "0.2.0-rc.2"
+version = "0.2.0-rc.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-tools"
-version = "0.2.0-rc.2"
+version = "0.2.0-rc.3"
 dependencies = [
  "anyhow",
  "base64 0.23.0",
@@ -1395,7 +1395,7 @@ dependencies = [
 
 [[package]]
 name = "nym-bridge"
-version = "0.2.0-rc.2"
+version = "0.2.0-rc.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1412,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "nym-bridges"
-version = "0.2.0-rc.2"
+version = "0.2.0-rc.3"
 dependencies = [
  "anyhow",
  "base64 0.23.0",
@@ -1455,7 +1455,7 @@ dependencies = [
 
 [[package]]
 name = "nym-bridges-types"
-version = "0.2.0-rc.2"
+version = "0.2.0-rc.3"
 dependencies = [
  "serde",
  "serde_json",
