@@ -20,7 +20,8 @@
 //! - Namespaces are not supported, all exported types should have unique names.
 //! - Not all types are supported or can be bridged. Keep exported types simple.
 //!
-//! 2. TypeScript bindings using [ts-rs](https://docs.rs/ts-rs) (feature flag: typescript-bindings). Serialization (using serde) uses camelCase for compatibility with TypeScript/Tauri.
+//! 2. TypeScript bindings using [ts-rs](https://docs.rs/ts-rs) (feature flag: typescript-bindings). Serialization (using serde) uses snake_case because initial version of
+//! the configs for deployed in mainnet bridges use snake_case. This will likely be fixed in a future version of the config types.
 //!    Run the following command to generate TypeScript bindings:
 //!    ```sh
 //!    cargo test -p nym-vpn-lib-types -F typescript-bindings
@@ -58,11 +59,7 @@ uniffi::custom_type!(SocketAddr, String, {
     ts(export),
     ts(export_to = "bindings.ts")
 )]
-#[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
-#[cfg_attr(
-    all(feature = "serde", not(feature = "typescript-bindings")),
-    serde(rename_all = "snake_case")
-)]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub struct PersistedClientConfig {
     pub version: String,
     pub transports: Vec<ClientConfig>,
@@ -91,11 +88,7 @@ impl PersistedClientConfig {
     ts(export),
     ts(export_to = "bindings.ts")
 )]
-#[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
-#[cfg_attr(
-    all(feature = "serde", not(feature = "typescript-bindings")),
-    serde(rename_all = "snake_case")
-)]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum ClientConfig {
     QuicPlain(quic::ClientOptions),
     TlsPlain(tls::ClientOptions),
@@ -130,11 +123,7 @@ pub mod quic {
         ts(export),
         ts(export_to = "bindings.ts")
     )]
-    #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
-    #[cfg_attr(
-        all(feature = "serde", not(feature = "typescript-bindings")),
-        serde(rename_all = "snake_case")
-    )]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     pub struct QuicPlainClientOptions {
         /// Address describing the remote transport server. This is a vec to support multiple addresses
         /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
@@ -170,11 +159,7 @@ pub mod tls {
         ts(export),
         ts(export_to = "bindings.ts")
     )]
-    #[cfg_attr(feature = "typescript-bindings", serde(rename_all = "camelCase"))]
-    #[cfg_attr(
-        all(feature = "serde", not(feature = "typescript-bindings")),
-        serde(rename_all = "snake_case")
-    )]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     pub struct TlsPlainClientOptions {
         /// Address describing the remote transport server. This is a vec to support multiple addresses
         /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
@@ -195,29 +180,32 @@ pub mod tls {
 
 #[cfg(test)]
 mod test {
+    use crate::{ClientConfig, PersistedClientConfig};
+
     const RAW_V0_CLIENT_CONFIG: &str = r#"{"version":"0","transports":[{"transport_type":"quic_plain","args":{"addresses":["139.162.33.226:4443","[2400:8901::2000:faff:fea6:87f2]:4443"],"host":"netdna.bootstrapcdn.com","id_pubkey":"9JC91ZiszhIn3n4FG+MDYE/lYwhGdpHGWQTKUqGl+sE="}}]}"#;
 
+    /// The initial version of the bridge descriptors that are provided by the gateways use a snake case
+    /// for the enum differentiator. This test validates that under normal circumstances that the descriptor
+    /// is parsed as  expected. The only situation under which the enum differentiator has a different format
+    /// is when using the `typescript-bindings` feature.
     #[test]
-    fn ensure_v0_parsing_compatibility() -> Result<(), Box<dyn std::error::Error>> {
+    fn ensure_bridge_v0_parsing_compatibility() -> Result<(), Box<dyn std::error::Error>> {
         // Parse the JSON to verify structure
-        let parsed: serde_json::Value = serde_json::from_str(RAW_V0_CLIENT_CONFIG)?;
+        let parsed: PersistedClientConfig = serde_json::from_str(RAW_V0_CLIENT_CONFIG)?;
 
         // Verify version
-        assert_eq!(parsed["version"], "0");
+        assert_eq!(parsed.version, "0");
 
         // Verify transport type
-        assert_eq!(parsed["transports"][0]["transport_type"], "quic_plain");
+        let params = match &parsed.transports[0] {
+            ClientConfig::QuicPlain(p) => p,
+            ClientConfig::TlsPlain(_) => return Err("expected quic transport args".into()),
+        };
 
         // Verify addresses contain our test IPs
-        let addresses = &parsed["transports"][0]["args"]["addresses"];
-        assert!(addresses.is_array());
+        let addresses = &params.addresses;
 
-        let address_strings: Vec<String> = addresses
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap().to_string())
-            .collect();
+        let address_strings: Vec<String> = addresses.iter().map(|v| v.to_string()).collect();
 
         // Should contain both IPv4 and IPv6 addresses with port 4443
         assert!(
@@ -232,10 +220,7 @@ mod test {
         );
 
         // Verify host field
-        assert_eq!(
-            parsed["transports"][0]["args"]["host"],
-            "netdna.bootstrapcdn.com"
-        );
+        assert_eq!(params.host, Some("netdna.bootstrapcdn.com".to_string()),);
 
         Ok(())
     }
