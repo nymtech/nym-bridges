@@ -12,12 +12,12 @@ members = [
 
 [workspace.package]
 authors = ["Nym Technologies SA"]
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 edition = "2024"
 repository = "https://github.com/nymtech/nym-bridges"
 homepage = "https://nymtech.net"
 documentation = "https://nymtech.net"
-license = "AGPL-3.0-only"
+license = "GPL-3.0-only"
 rust-version = "1.95"
 
 
