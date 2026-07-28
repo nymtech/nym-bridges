@@ -21,7 +21,7 @@
 //! - Not all types are supported or can be bridged. Keep exported types simple.
 //!
 //! 2. TypeScript bindings using [ts-rs](https://docs.rs/ts-rs) (feature flag: `typescript-bindings`). Serialization ([using serde](https://docs.rs/serde)) uses `snake_case`.
-//! 
+//!
 //!    Run the following command to generate TypeScript bindings:
 //!    ```sh
 //!    cargo test -p nym-vpn-lib-types -F typescript-bindings
@@ -29,7 +29,7 @@
 //!
 //! ## Serde support
 //!
-//! Serde can be enabled using `serde` feature flag. 
+//! Serde can be enabled using `serde` feature flag.
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
