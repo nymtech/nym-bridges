@@ -22,18 +22,25 @@
 //!
 //! # Example: Simple Client Connection Establishment
 //!
-//! ```
+//! ```rust no_run
+//! # #[tokio::main]
+//! # async fn main() -> Result<(),anyhow::Error>{
+//! use anyhow::anyhow;
 //! use nym_bridges::connection::{BridgeConn, SOCKET_OPEN_NOP};
-//! use nym_bridges::types::PersistedClientConfig;
+//! use nym_bridges::config::parse_persisted_config_json;
 //! use nym_bridges::forward::UdpForwarder;
 //! use tokio_util::sync::CancellationToken;
 //!
 //! let client_config_str = r#"{"version":"0","transports":[{"transport_type":"quic_plain","args":{"addresses":["139.162.33.226:4443","[2400:8901::2000:faff:fea6:87f2]:4443"],"host":"netdna.bootstrapcdn.com","id_pubkey":"9JC91ZiszhIn3n4FG+MDYE/lYwhGdpHGWQTKUqGl+sE="}}]}"#;
 //! let shutdown_token = CancellationToken::new();
 //! let entry_bridge_params = parse_persisted_config_json(client_config_str)?;
+//! let transport_params = entry_bridge_params
+//!     .transports
+//!     .first()
+//!     .ok_or(anyhow!("no config provided"))?;
 //!
 //! let bridge_conn = BridgeConn::try_connect(
-//!     entry_bridge_params.into(),
+//!     transport_params.clone(),
 //!     shutdown_token.clone(),
 //!     #[cfg(any(target_os = "linux", target_os = "android"))]
 //!     SOCKET_OPEN_NOP,
@@ -41,7 +48,7 @@
 //! .await?;
 //!
 //! let remote_addr = bridge_conn.endpoint();
-//! let (listen_addr, join_handle) = UdpForwarder::launch(
+//! let (listen_addr, join_handle) = UdpForwarder::launch_initiator(
 //!     bridge_conn,
 //!     None,
 //!     None,
@@ -50,6 +57,7 @@
 //! .await?;
 //!
 //! # Ok::<(), anyhow::Error>(())
+//! # }
 //! ```
 //!
 //! # Example: Parse and Convert Configuration
