@@ -12,7 +12,7 @@ members = [
 
 [workspace.package]
 authors = ["Nym Technologies SA"]
-version = "0.2.0-rc.3"
+version = "0.2.0"
 edition = "2024"
 repository = "https://github.com/nymtech/nym-bridges"
 homepage = "https://nymtech.net"
@@ -26,7 +26,7 @@ anyhow = "1.0"
 base64 = "0.23.0"
 bip39 = "2.2"
 bs58 = "0.5.1"
-bytes = "1"
+bytes = "1.12"
 clap = { version = "4", features = ["derive", "string"] }
 ed25519-dalek = { version = "3.0", features = [
     "pkcs8",
@@ -48,16 +48,16 @@ quinn = { version = "0.11", default-features = false, features = [
     "rustls",
     "runtime-tokio",
 ] }
-quinn-proto = { version = "0.11", default-features = false, features = [
+quinn-proto = { version = "0.11.16", default-features = false, features = [
     "rustls",
 ] }
 rand = "0.10"
 rand_chacha = "0.10"
 rcgen = "0.14"
 reqwest = { version = "0.13.4", default-features = false }
-ring = "0.17"
+ring = "0.17.14"
 rustc-hash = "2"
-rustls = { version = "0.23.5", default-features = false, features = [
+rustls = { version = "0.23.42", default-features = false, features = [
     "std",
     "ring",
     "logging",
@@ -79,10 +79,10 @@ tokio-rustls = { version = "0.26", default-features = false, features = [
     "logging",
 ] }
 tokio-util = { version = "0.7", features = ["full"] }
-toml = "0.9"
+toml = "1.1.0"
 toml_edit = "0.24"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", default-features = false, features = [
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
     "env-filter",
     "fmt",
     "ansi",
@@ -90,7 +90,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
     "local-time",
 ] }
 ts-rs = "12.0.1"
-uniffi = { version = "=0.31.1", features = ["cli"] }
+uniffi = { version = "=0.32", features = ["cli"] }
 uuid = "1.24"
 x509-parser = { version = "0.18", features = ["verify"] }
 webpki-roots = "1.0"

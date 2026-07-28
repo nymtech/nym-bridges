@@ -17,9 +17,13 @@ This repository implements and provides tooling for a pluggable transport system
 obfuscate [Nym VPN](https://github.com/nymtech/nym-vpn-client/) traffic. The
 [nym-bridge](./crates/nym-bridge/) is a server-side transparent forwarder accepting and unwrapping
 obfuscated traffic to be passed on to a colocated [nym-node](https://github.com/nymtech/nym) entry
-gateway.
+gateway. The larger Nym system provides a secure distributed multi-hop VPN and mixnet.
 
-The larger Nym system provides a secure distributed multi-hop VPN and mixnet.
+| Crate | crates.io | docs.rs | dependencies |
+| :--- | --- | --- | ---
+| [nym-bridges](./crates/nym-bridges/) |  [![nym-bridges crate](https://img.shields.io/crates/v/nym-bridges.svg)](https://crates.io/crates/nym-bridges) | [![nym-bridges docs](https://docs.rs/nym-bridges/badge.svg)](https://docs.rs/nym-bridges) | [![dependency status](https://deps.rs/crate/nym-bridges/latest/status.svg)](https://deps.rs/crate/nym-bridges/latest) |
+| [nym-bridges-types](./crates/nym-bridges-types/)  | [![nym-bridges-types crate](https://img.shields.io/crates/v/nym-bridges-types.svg)](https://crates.io/crates/nym-bridges-types) | [![nym-bridges-types docs](https://docs.rs/nym-bridges-types/badge.svg)](https://docs.rs/nym-bridges-types)  | [![dependency status](https://deps.rs/crate/nym-bridges-types/latest/status.svg)](https://deps.rs/crate/nym-bridges-types/latest) |
+
 
 <div align="center">
 
