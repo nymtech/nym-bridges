@@ -658,6 +658,7 @@ pub(crate) mod test {
                     assert!(has_ipv4 || has_ipv6, "should have at least one IP address");
                 }
                 ClientConfig::TlsPlain(_cfg) => todo!(),
+                ClientConfig::SshPlain(_cfg) => todo!(),
             });
 
         Ok(())
@@ -767,6 +768,7 @@ pub(crate) mod test {
                     assert_eq!(cfg.connection_limit, Some(10_000));
                 }
                 TransportServerConfig::TlsPlain(_cfg) => todo!(),
+                TransportServerConfig::SshPlain(_cfg) => todo!(),
             });
 
         let client_params_out =
@@ -781,6 +783,7 @@ pub(crate) mod test {
                     assert!(cfg.addresses.contains(&"192.168.0.1:443".parse().unwrap()));
                 }
                 ClientConfig::TlsPlain(_cfg) => todo!(),
+                ClientConfig::SshPlain(_cfg) => todo!(),
             });
     }
 

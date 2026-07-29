@@ -80,6 +80,7 @@ nym-bridge -c /etc/nym/default-nym-node/server.toml
 # must be modified if they are to be run at the same time.
 client-udp --config /etc/nym/default-nym-node/client_quic.toml
 client-udp --config /etc/nym/default-nym-node/client_tls.toml
+client-udp --config /etc/nym/default-nym-node/client_ssh.toml
 
 # in wg0 container -- open a tcp connection to kick off the layered wrapped tunnel to the netcat tcp listener on the server
 nc -vvv 10.0.1.2 9999

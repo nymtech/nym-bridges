@@ -86,6 +86,7 @@ impl PersistedClientConfig {
             match transport {
                 ClientConfig::QuicPlain(params) => addrs.extend(&params.addresses),
                 ClientConfig::TlsPlain(params) => addrs.extend(&params.addresses),
+                ClientConfig::SshPlain(params) => addrs.extend(&params.addresses),
             }
         }
         addrs
@@ -114,6 +115,7 @@ impl PersistedClientConfig {
 pub enum ClientConfig {
     QuicPlain(quic::ClientOptions),
     TlsPlain(tls::ClientOptions),
+    SshPlain(ssh::ClientOptions),
 }
 
 impl From<quic::ClientOptions> for ClientConfig {
@@ -134,6 +136,7 @@ impl ClientConfig {
         match self {
             ClientConfig::QuicPlain(o) => &o.addresses,
             ClientConfig::TlsPlain(o) => &o.addresses,
+            ClientConfig::SshPlain(o) => &o.addresses,
         }
     }
 }
@@ -143,6 +146,7 @@ impl Sufficiency for ClientConfig {
         match self {
             ClientConfig::QuicPlain(o) => o.is_sufficient(),
             ClientConfig::TlsPlain(o) => o.is_sufficient(),
+            ClientConfig::SshPlain(o) => o.is_sufficient(),
         }
     }
 }
@@ -152,7 +156,14 @@ impl TransportAssociation for ClientConfig {
         match self {
             ClientConfig::QuicPlain(o) => o.transport_name(),
             ClientConfig::TlsPlain(o) => o.transport_name(),
+            ClientConfig::SshPlain(o) => o.transport_name(),
         }
+    }
+}
+
+impl From<ssh::ClientOptions> for ClientConfig {
+    fn from(value: ssh::ClientOptions) -> Self {
+        ClientConfig::SshPlain(value)
     }
 }
 
@@ -262,6 +273,54 @@ pub mod tls {
     pub type ClientOptions = TlsPlainClientOptions;
 }
 
+pub mod ssh {
+    #[cfg(feature = "serde")]
+    use serde::{Deserialize, Serialize};
+    use std::net::SocketAddr;
+
+    #[cfg(feature = "typescript-bindings")]
+    use ts_rs::TS;
+
+    pub const TRANSPORT_NAME: &str = "ssh_plain";
+
+    #[derive(Debug, PartialEq, Clone)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+    #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+    #[cfg_attr(
+        feature = "typescript-bindings",
+        derive(TS),
+        ts(export),
+        ts(export_to = "bindings.ts")
+    )]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    pub struct SshPlainClientOptions {
+        /// Address describing the remote transport server. This is a vec to support multiple addresses
+        /// so as to support both IPv4 and IPv6. These addresses are meant to describe a single bridge
+        /// as the key material should not be used across multiple instances.
+        ///
+        /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
+        pub addresses: Vec<SocketAddr>,
+
+        /// Use identity public key to verify the server's ed25519 SSH host key, base64 encoded
+        pub id_pubkey: String,
+    }
+
+    impl Sufficiency for TlsPlainClientOptions {
+        fn is_sufficient(&self) -> bool {
+            !self.addresses.is_empty() && !self.id_pubkey.trim().is_empty()
+        }
+    }
+
+    impl TransportAssociation for TlsPlainClientOptions {
+        fn transport_name(&self) -> String {
+            TRANSPORT_NAME.to_string()
+        }
+    }
+
+    pub type ClientOptions = SshPlainClientOptions;
+}
+
 #[cfg(test)]
 mod test {
     use crate::{ClientConfig, PersistedClientConfig};
@@ -284,6 +343,7 @@ mod test {
         let params = match &parsed.transports[0] {
             ClientConfig::QuicPlain(p) => p,
             ClientConfig::TlsPlain(_) => return Err("expected quic transport args".into()),
+            ClientConfig::SshPlain(_) => return Err("expected quic transport args".into()),
         };
 
         // Verify addresses contain our test IPs

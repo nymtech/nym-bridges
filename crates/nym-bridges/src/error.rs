@@ -22,6 +22,9 @@ pub enum TransportError {
 
     #[error("quic crypto config error: {0}")]
     QuicCrypto(#[from] quinn_proto::crypto::rustls::NoInitialCipherSuite),
+    
+    #[error("ssh transport error: {0}")]
+    Ssh(#[from] russh::Error),
 
     #[error("transport socket io error")]
     SocketIo(#[source] std::io::Error),

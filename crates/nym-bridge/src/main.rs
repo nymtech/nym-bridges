@@ -13,7 +13,7 @@ use nym_bridges::{
     config::{ForwardConfig, PersistedServerConfig, TransportServerConfig},
     forward::responder::process_udp,
     session::Session,
-    transport::{quic, tls},
+    transport::{quic, ssh, tls},
 };
 
 #[derive(Debug, Parser, PartialEq)]
@@ -72,6 +72,15 @@ async fn main() -> Result<()> {
                     let err_token = cloned_token.clone();
                     if let Err(e) = launch_tls_listener(cloned_token, fwd_config, options).await {
                         error!("TLS Listener failed: {e}");
+                        err_token.cancel();
+                    }
+                });
+            }
+            TransportServerConfig::SshPlain(options) => {
+                transport_listeners.spawn(async {
+                    let err_token = cloned_token.clone();
+                    if let Err(e) = launch_ssh_listener(cloned_token, fwd_config, options).await {
+                        error!("SSH Listener failed: {e}");
                         err_token.cancel();
                     }
                 });
@@ -194,6 +203,88 @@ async fn launch_tls_listener(
             }
         }
     }
+}
+
+async fn launch_ssh_listener(
+    token: CancellationToken,
+    fwd_cfg: ForwardConfig,
+    options: ssh::ServerConfig,
+) -> Result<()> {
+    let config =
+        ssh::create_listener(&options).context("failed to initialize cryptographic config")?;
+
+    let listener = tokio::net::TcpListener::bind(&options.listen).await?;
+    tracing::info!("ssh transport listening on {}", &options.listen);
+
+    loop {
+        tokio::select! {
+            // Use the provided token to listen to cancellation requests
+            _ = token.cancelled() => {
+                // The token was cancelled, task can shut down
+                info!("ssh listener shutting down");
+                return Ok(())
+            }
+            res = listener.accept() => {
+                let (stream, address) = res?;
+                let config = config.clone();
+                let client_token = token.clone();
+                let fwd = fwd_cfg.clone();
+
+                tokio::spawn(async move {
+                    match ssh::accept(config, stream).await {
+                        Ok(chan_stream) => {
+                            handle_ssh_connection(chan_stream, address, fwd, client_token).await;
+                        }
+                        Err(err) => {
+                            warn!("ssh handshake failed: {err}");
+                        }
+                    }
+                });
+            }
+        }
+    }
+}
+
+pub async fn handle_ssh_connection(
+    stream: ssh::ServerChannelStream,
+    transport_client_addr: SocketAddr,
+    fwd_cfg: ForwardConfig,
+    token: CancellationToken,
+) {
+    let session = Session::new(&fwd_cfg.address, &transport_client_addr);
+    let span = info_span!(
+        "connection",
+        remote = %session.transport_remote(),
+        session_id = %session.id()
+    );
+    async {
+        debug!("accepted ssh connection");
+
+        if let Err(err) = handle_ssh_connection_inner(stream, session, fwd_cfg, token).await {
+            warn!("connection error: {err}");
+        }
+    }
+    .instrument(span)
+    .await;
+}
+
+async fn handle_ssh_connection_inner(
+    stream: ssh::ServerChannelStream,
+    session: Session,
+    fwd_cfg: ForwardConfig,
+    token: CancellationToken,
+) -> Result<()> {
+    let session_token = token.child_token();
+
+    let local_sock = Arc::new(tokio::net::UdpSocket::bind("[::]:0").await?);
+    local_sock.connect(fwd_cfg.address).await?;
+
+    let (recv, send) = tokio::io::split(stream);
+    process_udp(recv, send, local_sock, session.clone(), 1500, session_token).await;
+
+    info!("end session:"); // in theory handle session logging stats on close
+
+    Ok(())
 }
 
 pub async fn handle_tls_connection(

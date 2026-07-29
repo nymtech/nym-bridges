@@ -12,7 +12,11 @@ use nym_bridges::config::{ClientConfig, PersistedClientConfig};
 use nym_bridges::connection::BridgeConn;
 use nym_bridges::forward::initiator::process_udp;
 use nym_bridges::session::Session;
+<<<<<<< HEAD
 use nym_bridges::types::TransportAssociation;
+=======
+use nym_bridges::transport::{quic, ssh, tls};
+>>>>>>> ab927de (seemingly working minimal ssh bridge protocol)
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(name = "args")]
@@ -173,6 +177,28 @@ async fn transport_session(
     let (rd, wr, closer) = conn.into_parts();
 
     process_udp(rd, wr, closer, socket, 1500, None, token).await;
+    info!("end session");
+
+    Ok(())
+}
+
+async fn ssh_connection(
+    opts: &ssh::ClientOptions,
+    socket: Arc<UdpSocket>,
+    token: CancellationToken,
+) -> Result<()> {
+    debug!("opening transport connection");
+    let start = Instant::now();
+
+    let transport_conn = ssh::transport_conn(opts)
+        .await
+        .context("failed to connect to transport conn")?;
+
+    debug!("tls transport connected in {:?}", start.elapsed());
+
+    let (rd, wr) = tokio::io::split(transport_conn);
+
+    process_udp(rd, wr, socket, 1500, None, token).await;
     info!("end session");
 
     Ok(())

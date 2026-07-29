@@ -26,3 +26,14 @@ listen = "[::]:4443"
 # private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity'
 
 identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
+
+[[transports]]
+transport_type = "ssh_plain"
+
+[transports.args]
+listen = "[::]:4422"
+
+# Path to file containing PEM encoded ed25519 identity private key, for use in ED25519 based self signed certs
+# private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity'
+
+identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="

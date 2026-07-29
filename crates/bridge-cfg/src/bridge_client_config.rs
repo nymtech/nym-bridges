@@ -94,6 +94,9 @@ impl TryFrom<&BridgeConfig> for BridgeClientConfig {
                     TransportServerConfig::TlsPlain(_cfg) => {
                         todo!()
                     }
+                    TransportServerConfig::SshPlain(_cfg) => {
+                        todo!()
+                    }
                 }
             }
         }

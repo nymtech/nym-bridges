@@ -54,6 +54,7 @@ quinn.workspace = true
 rand = { workspace = true, features = ["thread_rng", "sys_rng"] }
 rcgen.workspace = true
 ring.workspace = true
+russh.workspace = true
 rustc-hash.workspace = true
 rustls = { workspace = true, default-features = false, features = [
     "std",

@@ -332,6 +332,12 @@ impl ServerConfigSource {
     pub fn public_identity(&self) -> [u8; 32] {
         SigningKey::from_bytes(&self.0).verifying_key().to_bytes()
     }
+
+    /// Raw 32-byte ed25519 seed backing this identity, for transports (e.g. SSH) that need to
+    /// construct their own key material rather than a TLS certificate.
+    pub fn identity_seed(&self) -> [u8; 32] {
+        self.0
+    }
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
-use crate::transport::{quic, tls};
+use crate::transport::{quic, tls, ssh};\
 use crate::{config::ClientConfig, error::TransportError};
 use nym_bridges_types::TransportAssociation;
 
@@ -111,6 +111,24 @@ impl BridgeConn {
                     start.elapsed()
                 );
                 let (reader, writer) = tokio::io::split(conn);
+                Ok(Self {
+                    reader: Box::new(reader),
+                    writer: Box::new(writer),
+                    params,
+                    endpoint,
+                    closer: Box::new(()),
+                })
+            }
+            ClientConfig::SshPlain(ref opts) => {
+                let endpoint = *opts.addresses.first().ok_or_else(|| {
+                    TransportError::config_err("no ssh bridge address configured")
+                })?;
+                let stream = token
+                    .run_until_cancelled(ssh::transport_conn(opts))
+                    .await
+                    .ok_or(TransportError::Cancelled)??;
+                let (reader, writer) = tokio::io::split(stream);
+                info!("ssh transport connected in {:?}", start.elapsed());
                 Ok(Self {
                     reader: Box::new(reader),
                     writer: Box::new(writer),
