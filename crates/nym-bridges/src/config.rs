@@ -146,9 +146,13 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let port = cfg.listen.port();
                     let addresses = ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect();
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
+                    let username = cfg.expected_username.clone();
+                    let banner = cfg.banner.clone();
                     transports.push(ClientConfig::SshPlain(ssh::ClientOptions {
                         addresses,
                         id_pubkey,
+                        username,
+                        banner,
                     }));
                 }
             }
@@ -267,6 +271,8 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
             connection_limit: Default::default(),
             identity_key: Some("fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=".into()),
             private_ed25519_identity_key_file: None,
+            expected_username: Some("root".into()),
+            banner: Some("Authorized use only".into()),
         };
 
         let cfg = PersistedServerConfig {
@@ -302,6 +308,8 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
                 "[fe80::1]:4422".parse().unwrap(),
             ],
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
+            username: Some("root".into()),
+            banner: Some("Authorized use only".into()),
         };
 
         for transport in client_config.transports {

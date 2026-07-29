@@ -274,6 +274,7 @@ pub mod tls {
 }
 
 pub mod ssh {
+    use crate::{Sufficiency, TransportAssociation};
     #[cfg(feature = "serde")]
     use serde::{Deserialize, Serialize};
     use std::net::SocketAddr;
@@ -300,19 +301,28 @@ pub mod ssh {
         /// as the key material should not be used across multiple instances.
         ///
         /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
+        #[cfg_attr(feature = "utoipa", schema(value_type = Vec<String>))]
         pub addresses: Vec<SocketAddr>,
 
         /// Use identity public key to verify the server's ed25519 SSH host key, base64 encoded
         pub id_pubkey: String,
+
+        /// User identity sent as part of a basic auth on the clients behalf.
+        pub username: Option<String>,
+
+        /// SSH banner the server is expected to present during authentication, as configured on
+        /// the server. This is informational only - it is not validated against whatever banner
+        /// the server actually presents when a connection is established.
+        pub banner: Option<String>,
     }
 
-    impl Sufficiency for TlsPlainClientOptions {
+    impl Sufficiency for SshPlainClientOptions {
         fn is_sufficient(&self) -> bool {
             !self.addresses.is_empty() && !self.id_pubkey.trim().is_empty()
         }
     }
 
-    impl TransportAssociation for TlsPlainClientOptions {
+    impl TransportAssociation for SshPlainClientOptions {
         fn transport_name(&self) -> String {
             TRANSPORT_NAME.to_string()
         }

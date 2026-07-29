@@ -27,8 +27,9 @@ gateway. The larger Nym system provides a secure distributed multi-hop VPN and m
 
 <div align="center">
 
-⚠️⚠️  This repository is under active development and encodings, serialization formats, interfaces,
-etc. are subject to change  ⚠️⚠️
+⚠️⚠️  This repository is under active development ⚠️⚠️
+</br>Encodings, serialization formats, interfaces,
+etc. are subject to change  
 </div>
 
 ## Usage
@@ -96,6 +97,8 @@ $ nym-bridge -c "<path_to_bridge_config>"
 
 ## Protocols
 
+**NOTE:** The current transports assume that the next layer of the transport session is responsible for user authentications. Specifically in production these transport act as a transparent wrapper for wireguard traffic where wireguard is responsible for the ultimate authorization check. The initial defined protocol `quic_plain`, `tls_plain`, and `ssh_plain` are meant to resist protocol fingerprinting specifically and do not address challenges like active-probe resistance.
+
 #### Quic
 
 QUIC is a UDP-based, stream-multiplexing, connection-oriented, encrypted transport protocol that creates a stateful interaction between a client and server. The protocol published as [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000.html).
@@ -108,8 +111,15 @@ TLS over TCP is the most common protocol used across the public internet. It pro
 
 This tool uses ed25519 keys to sign certificates for the TLS handshake. The public (verifying) key is shared to clients as part of the node description and can be used to verify the server identity and secure a TLS connection.
 
-**[Future]** Shadowsocks | ssh | obfs4 | vmess | webrtc | ...
+**SSH over TCP**
 
+SSH over TCP piggybacks on a protocol that is extremely common on the public internet and blends in with ordinary administrative traffic. It provides a connection-oriented, encrypted transport secured by a Diffie-Hellman key exchange.
+
+This tool uses the same ed25519 identity key as the other transports as the server's SSH host key. The public (verifying) key is shared to clients as part of the node description and is pinned by the client to verify the server's identity during the key exchange, rather than trusting whatever host key is presented.
+
+Authentication uses SSH's `none` method purely as a shared username check between client and server (configurable, defaulting to `ubuntu`) rather than as a real multi-user credential. Once authenticated, the connection is restricted to a single, opaque data channel used to carry forwarded traffic: shell access, command execution, subsystems, pseudo-terminals, X11 forwarding, and TCP/IP port forwarding are all explicitly rejected, so the transport cannot be used as a general-purpose SSH server.
+
+**[Future]** Shadowsocks | obfs4 | vmess | webrtc | ...
 
 ## Testing
 

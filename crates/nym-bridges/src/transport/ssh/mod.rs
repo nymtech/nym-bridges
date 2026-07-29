@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use russh::keys::ssh_key;
-use russh::{Channel, ChannelStream, Preferred};
+use russh::{Channel, ChannelId, ChannelOpenFailure, ChannelStream, Preferred, Pty};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use tokio::net::TcpListener;
@@ -17,9 +17,10 @@ use crate::transport::tls::certs::ServerConfigSource;
 
 const DEFAULT_SOCK_ADDR: &str = "[::]:4422";
 
-/// User name presented during SSH auth. The transport doesn't have a notion of separate users, so
-/// the client just authenticates with the `none` method under a fixed placeholder name.
-const SSH_USER: &str = "nym-bridge";
+/// Default user name presented/expected during SSH auth when neither side has configured one.
+/// The transport doesn't have a notion of separate users; the `none` auth method is always used,
+/// and the username is only checked as a shared-secret-like gate between client and server.
+const DEFAULT_SSH_USER: &str = "ubuntu";
 
 /// Stream produced by the server side of the transport once a client has opened a channel.
 pub type ServerChannelStream = ChannelStream<russh::server::Msg>;
@@ -41,6 +42,14 @@ pub struct ServerConfig {
     /// Path to file containing PKCS8 PEM ed25519 identity private key, for use as the ed25519 SSH
     /// host key.
     pub private_ed25519_identity_key_file: Option<PathBuf>,
+
+    pub expected_username: Option<String>,
+
+    /// SSH banner presented to clients during authentication. Purely informational (e.g. a
+    /// notice or greeting) - not required for and not checked as part of establishing a
+    /// connection. This same value is copied into the generated client configuration so
+    /// consumers of that configuration know what banner to expect ahead of time.
+    pub banner: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -50,6 +59,8 @@ impl Default for ServerConfig {
             connection_limit: Default::default(),
             identity_key: Default::default(),
             private_ed25519_identity_key_file: Default::default(),
+            expected_username: Default::default(),
+            banner: Default::default(),
         }
     }
 }
@@ -89,6 +100,14 @@ impl ServerConfig {
         let public_id = crypto_source.public_identity();
         Ok(BASE64_STANDARD.encode(&public_id[..]))
     }
+
+    /// Username a connecting client must present via the `none` auth method, falling back to
+    /// [`DEFAULT_SSH_USER`] if none was configured.
+    pub fn expected_username(&self) -> String {
+        self.expected_username
+            .clone()
+            .unwrap_or_else(|| DEFAULT_SSH_USER.to_string())
+    }
 }
 
 /// Build the shared SSH server configuration (host key + kex/algorithm preferences) used to
@@ -97,19 +116,47 @@ pub fn create_listener(options: &ServerConfig) -> Result<Arc<russh::server::Conf
     Ok(Arc::new(options.build_server_config()?))
 }
 
-/// Handler for a single accepted TCP connection. Accepts `none` auth unconditionally (the
-/// transport has no notion of distinct users) and hands the first opened channel back to the
-/// caller via `channel_tx` so that further handling (framing, forwarding, etc.) is left entirely
-/// up to the application driving the accept loop.
+/// Handler for a single accepted TCP connection. Uses the `none` auth method, only checking that
+/// the client's presented username matches `expected_username` (the transport has no notion of
+/// distinct users beyond that), and hands the first opened channel back to the caller via
+/// `channel_tx` so that further handling (framing, forwarding, etc.) is left entirely up to the
+/// application driving the accept loop.
+///
+/// Only a plain "session" channel used to carry opaque forwarded bytes is supported. Everything
+/// else an SSH client can normally ask for - running commands, allocating a pty, subsystems, X11
+/// or TCP/IP forwarding - is explicitly refused rather than left to whatever the library's
+/// default behavior happens to be, since this is meant to be a narrow, single-purpose transport
+/// rather than a general-purpose SSH server.
 struct ConnectionHandler {
     channel_tx: Option<oneshot::Sender<Channel<russh::server::Msg>>>,
+    expected_username: String,
+    banner: Option<String>,
+}
+
+impl ConnectionHandler {
+    /// Send an explicit channel-request failure back to the client instead of leaving the
+    /// request without any response.
+    fn deny_channel_request(
+        session: &mut russh::server::Session,
+        channel: ChannelId,
+    ) -> Result<(), russh::Error> {
+        session.channel_failure(channel)
+    }
 }
 
 impl russh::server::Handler for ConnectionHandler {
     type Error = russh::Error;
 
-    async fn auth_none(&mut self, _user: &str) -> Result<russh::server::Auth, Self::Error> {
-        Ok(russh::server::Auth::Accept)
+    async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
+        Ok(self.banner.clone())
+    }
+
+    async fn auth_none(&mut self, user: &str) -> Result<russh::server::Auth, Self::Error> {
+        if user == self.expected_username {
+            Ok(russh::server::Auth::Accept)
+        } else {
+            Ok(russh::server::Auth::reject())
+        }
     }
 
     async fn channel_open_session(
@@ -124,6 +171,97 @@ impl russh::server::Handler for ConnectionHandler {
         }
         Ok(())
     }
+
+    async fn channel_open_x11(
+        &mut self,
+        _channel: Channel<russh::server::Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        reply
+            .reject(ChannelOpenFailure::AdministrativelyProhibited)
+            .await;
+        Ok(())
+    }
+
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        _channel: Channel<russh::server::Msg>,
+        _host_to_connect: &str,
+        _port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        reply
+            .reject(ChannelOpenFailure::AdministrativelyProhibited)
+            .await;
+        Ok(())
+    }
+
+    async fn tcpip_forward(
+        &mut self,
+        _address: &str,
+        _port: &mut u32,
+        _session: &mut russh::server::Session,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+
+    async fn pty_request(
+        &mut self,
+        channel: ChannelId,
+        _term: &str,
+        _col_width: u32,
+        _row_height: u32,
+        _pix_width: u32,
+        _pix_height: u32,
+        _modes: &[(Pty, u32)],
+        session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
+
+    async fn x11_request(
+        &mut self,
+        channel: ChannelId,
+        _single_connection: bool,
+        _x11_auth_protocol: &str,
+        _x11_auth_cookie: &str,
+        _x11_screen_number: u32,
+        session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
+
+    async fn shell_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        _data: &[u8],
+        session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        _name: &str,
+        session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
 }
 
 /// Perform the SSH handshake over an already-accepted TCP stream and wait for the client to open
@@ -134,11 +272,15 @@ impl russh::server::Handler for ConnectionHandler {
 /// the returned stream is dropped and the client disconnects.
 pub async fn accept(
     config: Arc<russh::server::Config>,
+    expected_username: String,
+    banner: Option<String>,
     stream: TcpStream,
 ) -> Result<ServerChannelStream, TransportError> {
     let (channel_tx, channel_rx) = oneshot::channel();
     let handler = ConnectionHandler {
         channel_tx: Some(channel_tx),
+        expected_username,
+        banner,
     };
 
     let running = russh::server::run_stream(config, stream, handler).await?;
@@ -163,6 +305,7 @@ pub use crate::types::ssh::ClientOptions;
 struct InnerClientOptions {
     pub addresses: Vec<SocketAddr>,
     pub id_pubkey: VerifyingKey,
+    pub username: Option<String>,
 }
 
 impl TryFrom<&ClientOptions> for InnerClientOptions {
@@ -173,6 +316,7 @@ impl TryFrom<&ClientOptions> for InnerClientOptions {
         Ok(Self {
             addresses: value.addresses.clone(),
             id_pubkey,
+            username: value.username.clone(),
         })
     }
 }
@@ -233,7 +377,8 @@ pub async fn transport_conn(
 
     let mut handle = russh::client::connect(client_config, addr, handler).await?;
 
-    let auth = handle.authenticate_none(SSH_USER).await?;
+    let username = inner_options.username.unwrap_or(DEFAULT_SSH_USER.into());
+    let auth = handle.authenticate_none(&username).await?;
     if !auth.success() {
         return Err(TransportError::other("ssh server rejected authentication"));
     }
@@ -248,87 +393,4 @@ pub async fn transport_conn(
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-    use ed25519_dalek::SigningKey;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[tokio::test]
-    async fn client_server_handshake_and_echo() {
-        let signing_key = SigningKey::generate(&mut rand::rng());
-        let verifying_key = signing_key.verifying_key();
-        let identity_key = BASE64_STANDARD.encode(signing_key.to_bytes());
-        let id_pubkey = BASE64_STANDARD.encode(verifying_key.to_bytes());
-
-        let server_cfg = ServerConfig {
-            listen: "127.0.0.1:0".parse().unwrap(),
-            connection_limit: None,
-            identity_key: Some(identity_key),
-            private_ed25519_identity_key_file: None,
-        };
-
-        let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let config = create_listener(&server_cfg).unwrap();
-
-        let server_task = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut chan_stream = accept(config, stream).await.unwrap();
-
-            let mut buf = [0u8; 5];
-            chan_stream.read_exact(&mut buf).await.unwrap();
-            chan_stream.write_all(&buf).await.unwrap();
-        });
-
-        let client_opts = ClientOptions {
-            addresses: vec![addr],
-            id_pubkey,
-        };
-        let mut client_stream = transport_conn(&client_opts).await.unwrap();
-        client_stream.write_all(b"hello").await.unwrap();
-
-        let mut buf = [0u8; 5];
-        client_stream.read_exact(&mut buf).await.unwrap();
-        assert_eq!(&buf, b"hello");
-
-        server_task.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn client_rejects_mismatched_host_key() {
-        let signing_key = SigningKey::generate(&mut rand::rng());
-        let identity_key = BASE64_STANDARD.encode(signing_key.to_bytes());
-
-        // Client is configured to pin a *different* identity than the server actually presents.
-        let wrong_pubkey = BASE64_STANDARD.encode(
-            SigningKey::generate(&mut rand::rng())
-                .verifying_key()
-                .to_bytes(),
-        );
-
-        let server_cfg = ServerConfig {
-            listen: "127.0.0.1:0".parse().unwrap(),
-            connection_limit: None,
-            identity_key: Some(identity_key),
-            private_ed25519_identity_key_file: None,
-        };
-
-        let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let config = create_listener(&server_cfg).unwrap();
-
-        let server_task = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let _ = accept(config, stream).await;
-        });
-
-        let client_opts = ClientOptions {
-            addresses: vec![addr],
-            id_pubkey: wrong_pubkey,
-        };
-        let result = transport_conn(&client_opts).await;
-        assert!(result.is_err());
-
-        let _ = server_task.await;
-    }
-}
+mod test;
