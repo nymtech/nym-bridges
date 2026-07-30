@@ -197,6 +197,7 @@ pub async fn transport_conn(
         .await
         .map_err(TransportError::QuicProto)
 }
+
 /// Create a client configuration for the quinn Quic client.
 ///
 /// This sets the following properties to prepare the connection:
