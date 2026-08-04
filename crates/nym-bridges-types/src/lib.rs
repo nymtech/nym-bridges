@@ -40,13 +40,13 @@ use ts_rs::TS;
 #[cfg(feature = "uniffi-bindings")]
 uniffi::setup_scaffolding!();
 
-use std::net::SocketAddr;
+use std::net::SocketAddr as BridgeSocketAddr;
 #[cfg(feature = "uniffi-bindings")]
 use std::str::FromStr;
 #[cfg(feature = "uniffi-bindings")]
-uniffi::custom_type!(SocketAddr, String, {
+uniffi::custom_type!(BridgeSocketAddr, String, {
     remote,
-    try_lift: |val| Ok(SocketAddr::from_str(&val)?),
+    try_lift: |val| Ok(BridgeSocketAddr::from_str(&val)?),
     lower: |val| val.to_string()
 });
 
@@ -66,7 +66,7 @@ pub struct PersistedClientConfig {
 }
 
 impl PersistedClientConfig {
-    pub fn get_addrs(&self) -> Vec<SocketAddr> {
+    pub fn get_addrs(&self) -> Vec<BridgeSocketAddr> {
         let mut addrs = Vec::new();
         for transport in &self.transports {
             match transport {
@@ -109,7 +109,7 @@ impl From<tls::ClientOptions> for ClientConfig {
 pub mod quic {
     #[cfg(feature = "serde")]
     use serde::{Deserialize, Serialize};
-    use std::net::SocketAddr;
+    use std::net::SocketAddr as BridgeSocketAddr;
 
     #[cfg(feature = "typescript-bindings")]
     use ts_rs::TS;
@@ -130,7 +130,7 @@ pub mod quic {
         /// as the key material should not be used across multiple instances.
         ///
         /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
-        pub addresses: Vec<SocketAddr>,
+        pub addresses: Vec<BridgeSocketAddr>,
 
         /// Override hostname used for certificate verification
         pub host: Option<String>,
@@ -145,7 +145,7 @@ pub mod quic {
 pub mod tls {
     #[cfg(feature = "serde")]
     use serde::{Deserialize, Serialize};
-    use std::net::SocketAddr;
+    use std::net::SocketAddr as BridgeSocketAddr;
 
     #[cfg(feature = "typescript-bindings")]
     use ts_rs::TS;
@@ -166,7 +166,7 @@ pub mod tls {
         /// as the key material should not be used across multiple instances.
         ///
         /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
-        pub addresses: Vec<SocketAddr>,
+        pub addresses: Vec<BridgeSocketAddr>,
 
         /// Override hostname used for certificate verification
         pub host: Option<String>,
