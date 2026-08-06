@@ -1461,6 +1461,7 @@ dependencies = [
  "serde_json",
  "ts-rs",
  "uniffi",
+ "utoipa",
 ]
 
 [[package]]
@@ -3049,6 +3050,7 @@ checksum = "6ba0b99ee52df3028635d93840c797102da61f8a7bb3cf751032455895b52ef8"
 dependencies = [
  "proc-macro2",
  "quote",
+ "regex",
  "syn 2.0.119",
 ]
 

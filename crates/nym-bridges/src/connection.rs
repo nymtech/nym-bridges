@@ -77,4 +77,21 @@ impl BridgeConn {
     pub fn endpoint(&self) -> SocketAddr {
         self.endpoint
     }
+
+    /// The parameters this connection was built from.
+    pub fn params(&self) -> &ClientConfig {
+        &self.params
+    }
+
+    /// Split into the raw duplex halves of the transport stream, for callers
+    /// that want to frame it themselves (e.g. length-delimited datapath
+    /// packets) rather than going through [`crate::forward::UdpForwarder`].
+    pub fn into_parts(
+        self,
+    ) -> (
+        Box<dyn AsyncRead + Send + Unpin>,
+        Box<dyn AsyncWrite + Send + Unpin>,
+    ) {
+        (self.reader, self.writer)
+    }
 }
