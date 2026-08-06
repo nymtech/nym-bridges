@@ -53,6 +53,7 @@ uniffi::custom_type!(BridgeSocketAddr, String, {
 #[derive(Debug, PartialEq, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(
     feature = "typescript-bindings",
     derive(TS),
@@ -82,6 +83,7 @@ impl PersistedClientConfig {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(tag = "transport_type", content = "args"))]
 #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Enum))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[cfg_attr(
     feature = "typescript-bindings",
     derive(TS),
@@ -117,6 +119,7 @@ pub mod quic {
     #[derive(Debug, PartialEq, Clone)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+    #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
     #[cfg_attr(
         feature = "typescript-bindings",
         derive(TS),
@@ -130,6 +133,7 @@ pub mod quic {
         /// as the key material should not be used across multiple instances.
         ///
         /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
+        #[cfg_attr(feature = "utoipa", schema(value_type = Vec<String>))]
         pub addresses: Vec<BridgeSocketAddr>,
 
         /// Override hostname used for certificate verification
@@ -153,6 +157,7 @@ pub mod tls {
     #[derive(Debug, PartialEq, Clone)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+    #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
     #[cfg_attr(
         feature = "typescript-bindings",
         derive(TS),
@@ -166,6 +171,7 @@ pub mod tls {
         /// as the key material should not be used across multiple instances.
         ///
         /// Must parse as a valid [`std::net::SocketAddr`] - e.g. `123.45.67.89:443`
+        #[cfg_attr(feature = "utoipa", schema(value_type = Vec<String>))]
         pub addresses: Vec<BridgeSocketAddr>,
 
         /// Override hostname used for certificate verification
