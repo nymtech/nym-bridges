@@ -129,7 +129,12 @@ impl TryFrom<&ClientOptions> for InnerClientOptions {
 
         Ok(Self {
             addresses: value.addresses.clone(),
-            host: value.host.clone(),
+            // Trim so a directory value padded with incidental whitespace still verifies as SNI.
+            host: value
+                .host
+                .as_deref()
+                .map(|h| h.trim().to_string())
+                .filter(|h| !h.is_empty()),
             id_pubkey,
         })
     }
@@ -138,8 +143,9 @@ impl TryFrom<&ClientOptions> for InnerClientOptions {
 impl InnerClientOptions {
     fn parse_base64_pubkey(key: impl AsRef<str>) -> Result<VerifyingKey, TransportError> {
         let mut pubkey_bytes = [0u8; 32];
+        // Trim so a directory value padded with incidental whitespace still base64-decodes.
         BASE64_STANDARD
-            .decode_slice(key.as_ref(), &mut pubkey_bytes)
+            .decode_slice(key.as_ref().trim(), &mut pubkey_bytes)
             .map_err(|e| {
                 TransportError::config_err(format!(
                     "failed to decode Quic bridge public key as base64: {e}"

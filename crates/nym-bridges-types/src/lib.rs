@@ -50,6 +50,19 @@ uniffi::custom_type!(BridgeSocketAddr, String, {
     lower: |val| val.to_string()
 });
 
+/// Whether this transport has sufficient details to dial: at least one address and a non-blank
+/// identity pin (the pin is what the certificate is verified against, so a transport without one is
+/// unusable regardless of addresses). Callers picking "any advertised transport" should filter on
+/// this — see [`PersistedClientConfig::usable_transports`].
+pub trait Sufficiency {
+    fn is_sufficient(&self) -> bool;
+}
+
+/// Trait allowing types to indicate the name of the transport type with which they are associated.
+pub trait TransportAssociation {
+    fn transport_name(&self) -> String;
+}
+
 #[derive(Debug, PartialEq, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
@@ -76,6 +89,13 @@ impl PersistedClientConfig {
             }
         }
         addrs
+    }
+
+    /// The transports that are actually usable (see [`ClientConfig::is_usable`]),
+    /// in the order they were listed. A caller wanting to dial "any advertised
+    /// transport" should try these in order rather than assuming a single one.
+    pub fn usable_transports(&self) -> impl Iterator<Item = &ClientConfig> {
+        self.transports.iter().filter(|t| t.is_sufficient())
     }
 }
 
@@ -108,13 +128,44 @@ impl From<tls::ClientOptions> for ClientConfig {
     }
 }
 
+impl ClientConfig {
+    /// Candidate bridge socket addresses, regardless of transport kind.
+    pub fn addresses(&self) -> &[BridgeSocketAddr] {
+        match self {
+            ClientConfig::QuicPlain(o) => &o.addresses,
+            ClientConfig::TlsPlain(o) => &o.addresses,
+        }
+    }
+}
+
+impl Sufficiency for ClientConfig {
+    fn is_sufficient(&self) -> bool {
+        match self {
+            ClientConfig::QuicPlain(o) => o.is_sufficient(),
+            ClientConfig::TlsPlain(o) => o.is_sufficient(),
+        }
+    }
+}
+
+impl TransportAssociation for ClientConfig {
+    fn transport_name(&self) -> String {
+        match self {
+            ClientConfig::QuicPlain(o) => o.transport_name(),
+            ClientConfig::TlsPlain(o) => o.transport_name(),
+        }
+    }
+}
+
 pub mod quic {
+    use crate::{Sufficiency, TransportAssociation};
     #[cfg(feature = "serde")]
     use serde::{Deserialize, Serialize};
     use std::net::SocketAddr as BridgeSocketAddr;
 
     #[cfg(feature = "typescript-bindings")]
     use ts_rs::TS;
+
+    pub const TRANSPORT_NAME: &str = "quic_plain";
 
     #[derive(Debug, PartialEq, Clone)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -143,16 +194,31 @@ pub mod quic {
         pub id_pubkey: String,
     }
 
+    impl Sufficiency for QuicPlainClientOptions {
+        fn is_sufficient(&self) -> bool {
+            !self.addresses.is_empty() && !self.id_pubkey.trim().is_empty()
+        }
+    }
+
+    impl TransportAssociation for QuicPlainClientOptions {
+        fn transport_name(&self) -> String {
+            TRANSPORT_NAME.to_string()
+        }
+    }
+
     pub type ClientOptions = QuicPlainClientOptions;
 }
 
 pub mod tls {
+    use crate::{Sufficiency, TransportAssociation};
     #[cfg(feature = "serde")]
     use serde::{Deserialize, Serialize};
     use std::net::SocketAddr as BridgeSocketAddr;
 
     #[cfg(feature = "typescript-bindings")]
     use ts_rs::TS;
+
+    pub const TRANSPORT_NAME: &str = "tls_plain";
 
     #[derive(Debug, PartialEq, Clone)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -179,6 +245,18 @@ pub mod tls {
 
         /// Use identity public key to verify server self signed certificate base64 encoded
         pub id_pubkey: String,
+    }
+
+    impl Sufficiency for TlsPlainClientOptions {
+        fn is_sufficient(&self) -> bool {
+            !self.addresses.is_empty() && !self.id_pubkey.trim().is_empty()
+        }
+    }
+
+    impl TransportAssociation for TlsPlainClientOptions {
+        fn transport_name(&self) -> String {
+            TRANSPORT_NAME.to_string()
+        }
     }
 
     pub type ClientOptions = TlsPlainClientOptions;
