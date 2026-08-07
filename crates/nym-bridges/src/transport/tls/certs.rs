@@ -23,7 +23,6 @@
 //!     - done last to avoid ed25519 signature verification in case string based checks fail
 //!   - uses the default [`rustls::client::WebPkiServerVerifier`] to verify TLS 1.2 / TLS 1.3
 
-use anyhow::{Context, Result, anyhow};
 use base64::prelude::*;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey};
@@ -40,10 +39,12 @@ use x509_parser::prelude::*;
 
 use std::{fmt::Debug, fs, path::Path, sync::Arc};
 
+use crate::error::TransportError;
+
 pub fn get_cert_signed_by_ed25519<'a>(
     common_name: String,
     signing_key: &SigningKey,
-) -> Result<(Certificate, PrivateKeyDer<'a>)> {
+) -> Result<(Certificate, PrivateKeyDer<'a>), TransportError> {
     let pem = signing_key
         .to_pkcs8_pem(LineEnding::LF)
         .expect("failed to create pem from signing key");
@@ -290,13 +291,13 @@ impl ServerConfigSource {
         Self(bytes)
     }
 
-    pub fn from_identity_base64(id_key_base64: &str) -> Result<Self> {
+    pub fn from_identity_base64(id_key_base64: &str) -> Result<Self, TransportError> {
         let key_in = BASE64_STANDARD.decode(id_key_base64)?;
         if key_in.len() != ed25519_dalek::SECRET_KEY_LENGTH {
-            return Err(anyhow::anyhow!(
+            return Err(TransportError::config_err(format!(
                 "incorrect identity key length: {}, (32 expected)",
                 key_in.len()
-            ));
+            )));
         }
 
         let mut bytes = [0u8; ed25519_dalek::SECRET_KEY_LENGTH];
@@ -305,28 +306,27 @@ impl ServerConfigSource {
         Ok(Self::from_identity(bytes))
     }
 
-    pub fn from_pkcs8_pem_file<P: AsRef<Path> + Debug>(path: P) -> Result<Self> {
+    pub fn from_pkcs8_pem_file<P: AsRef<Path> + Debug>(path: P) -> Result<Self, TransportError> {
         let pem = fs::read_to_string(path.as_ref())?;
-        let signing_key = SigningKey::from_pkcs8_pem(&pem)
-            .map_err(|e| anyhow!("failed to parse identity key in {path:?}: {e}"))?;
+        let signing_key = SigningKey::from_pkcs8_pem(&pem).map_err(|e| {
+            TransportError::config_err(format!("failed to parse identity key in {path:?}: {e}"))
+        })?;
         Ok(Self::from_identity(signing_key.to_bytes()))
     }
 
-    pub fn into_server_config(self) -> Result<rustls::ServerConfig> {
+    pub fn into_server_config(self) -> Result<rustls::ServerConfig, TransportError> {
         let key_bytes = self.0;
         info!("initializing from transport identity keypair");
         let signing_key = SigningKey::from_bytes(&key_bytes);
         let verif_key = signing_key.verifying_key();
         let pubkey_as_sn = bs58::encode(verif_key.to_bytes()).into_string();
-        let (cert, key) = get_cert_signed_by_ed25519(pubkey_as_sn, &signing_key)
-            .expect("failed to get cert from ed255519 key");
+        let (cert, key) = get_cert_signed_by_ed25519(pubkey_as_sn, &signing_key)?;
 
         let (certs, key) = (vec![cert.der().clone()], key);
 
-        rustls::ServerConfig::builder()
+        Ok(rustls::ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .context("failed to build cert")
+            .with_single_cert(certs, key)?)
     }
 
     pub fn public_identity(&self) -> [u8; 32] {

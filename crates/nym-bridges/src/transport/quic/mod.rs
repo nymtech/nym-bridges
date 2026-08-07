@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, anyhow};
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use quinn_proto::crypto::rustls::QuicClientConfig;
@@ -76,22 +75,22 @@ impl Default for ServerConfig {
 }
 
 impl ServerConfig {
-    fn get_crypto_source(&self) -> Result<ServerConfigSource> {
+    fn get_crypto_source(&self) -> Result<ServerConfigSource, TransportError> {
         // parse either key or file
         if let Some(ref base64_key) = self.identity_key {
             ServerConfigSource::from_identity_base64(base64_key)
         } else if let Some(ref key_path) = self.private_ed25519_identity_key_file {
             ServerConfigSource::from_pkcs8_pem_file(key_path)
         } else {
-            Err(anyhow!("no crypto source provided"))
+            Err(TransportError::config_err("no crypto source provided"))
         }
     }
 
-    fn build_server_config(&self) -> Result<rustls::ServerConfig> {
+    fn build_server_config(&self) -> Result<rustls::ServerConfig, TransportError> {
         self.get_crypto_source()?.into_server_config()
     }
 
-    pub fn get_id_pubkey(&self) -> Result<String> {
+    pub fn get_id_pubkey(&self) -> Result<String, TransportError> {
         let crypto_source = self.get_crypto_source()?;
 
         let public_id = crypto_source.public_identity();
@@ -99,7 +98,7 @@ impl ServerConfig {
     }
 }
 
-pub fn create_endpoint(options: &ServerConfig) -> Result<quinn::Endpoint> {
+pub fn create_endpoint(options: &ServerConfig) -> Result<quinn::Endpoint, TransportError> {
     let mut server_crypto = options.build_server_config()?;
 
     server_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
@@ -109,7 +108,7 @@ pub fn create_endpoint(options: &ServerConfig) -> Result<quinn::Endpoint> {
     let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config.max_concurrent_uni_streams(0_u8.into());
 
-    quinn::Endpoint::server(server_config, options.listen).context("failed to create QUIC endpoint")
+    Ok(quinn::Endpoint::server(server_config, options.listen)?)
 }
 
 // ====================================[ Client Side ]====================================

@@ -9,9 +9,10 @@ use tracing::*;
 use std::{io::Read, net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 
 use nym_bridges::config::{ClientConfig, PersistedClientConfig};
+use nym_bridges::connection::BridgeConn;
 use nym_bridges::forward::initiator::process_udp;
 use nym_bridges::session::Session;
-use nym_bridges::transport::{quic, tls};
+use nym_bridges::types::TransportAssociation;
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(name = "args")]
@@ -125,76 +126,51 @@ async fn handle_session(
     token: CancellationToken,
     socket: Arc<UdpSocket>,
 ) {
-    match &opt.transport_cfg.transports[0] {
-        ClientConfig::QuicPlain(opts) => {
-            let session = Session::new(&src, &opts.addresses[0]); //todo: handle multiple addresses
-
-            let span = info_span!(
-                "connection",
-                remote = %session.transport_remote(),
-                session_id = %session.id()
-            );
-
-            if let Err(e) = quic_connection(opts, socket, token).instrument(span).await {
-                error!("{e}");
-            }
-        }
-        ClientConfig::TlsPlain(opts) => {
-            let session = Session::new(&src, &opts.addresses[0]); //todo: handle multiple addresses
-
-            let span = info_span!(
-                "connection",
-                remote = %session.transport_remote(),
-                session_id = %session.id()
-            );
-
-            if let Err(e) = tls_connection(opts, socket, token).instrument(span).await {
-                error!("{e}");
-            }
-        }
+    let params = opt.transport_cfg.transports[0].clone();
+    // todo: handle multiple addresses
+    let transport_remote = match &params {
+        ClientConfig::QuicPlain(opts) => opts.addresses[0],
+        ClientConfig::TlsPlain(opts) => opts.addresses[0],
     };
+    let session = Session::new(&src, &transport_remote);
+
+    let span = info_span!(
+        "connection",
+        remote = %session.transport_remote(),
+        session_id = %session.id()
+    );
+
+    if let Err(e) = transport_session(params, socket, token)
+        .instrument(span)
+        .await
+    {
+        error!("{e}");
+    }
 }
 
-async fn quic_connection(
-    opts: &quic::ClientOptions,
+async fn transport_session(
+    params: ClientConfig,
     socket: Arc<UdpSocket>,
     token: CancellationToken,
 ) -> Result<()> {
     let start = Instant::now();
-    let conn = quic::transport_conn(opts, |_| {})
-        .await
-        .context("failed to connect to transport conn")?;
+    let transport_name = params.transport_name();
 
-    let (wr, rd) = conn
-        .open_bi()
-        .await
-        .context("failed to connect to transport stream")?;
+    let conn = BridgeConn::try_connect(
+        params,
+        token.clone(),
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        |_| {},
+    )
+    .await
+    .context("failed to connect to transport conn")?;
 
-    debug!("quic transport connected in {:?}", start.elapsed());
+    debug!(
+        "{transport_name} transport connected in {:?}",
+        start.elapsed()
+    );
 
-    process_udp(rd, wr, socket, 1500, None, token).await;
-    conn.close(0u32.into(), b"done");
-    info!("end session");
-    debug!("stats: {:?}", conn.stats());
-
-    Ok(())
-}
-
-async fn tls_connection(
-    opts: &tls::ClientOptions,
-    socket: Arc<UdpSocket>,
-    token: CancellationToken,
-) -> Result<()> {
-    debug!("opening transport connection");
-    let start = Instant::now();
-
-    let transport_conn = tls::transport_conn(opts)
-        .await
-        .context("failed to connect to transport conn")?;
-
-    debug!("tls transport connected in {:?}", start.elapsed());
-
-    let (rd, wr) = tokio::io::split(transport_conn);
+    let (rd, wr) = conn.into_parts();
 
     process_udp(rd, wr, socket, 1500, None, token).await;
     info!("end session");

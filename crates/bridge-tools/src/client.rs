@@ -12,7 +12,8 @@ use tracing::*;
 use tracing::{error, info};
 
 use nym_bridges::config::{ClientConfig, PersistedClientConfig};
-use nym_bridges::transport::{quic, tls};
+use nym_bridges::connection::BridgeConn;
+use nym_bridges::types::TransportAssociation;
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(name = "args")]
@@ -127,71 +128,17 @@ async fn process<RW>(
 ) where
     RW: AsyncWrite + AsyncRead + Unpin + Send,
 {
-    match opt.as_ref() {
-        ClientConfig::QuicPlain(opt) => process_quic(conn, ingress_addr, opt, token).await,
-        ClientConfig::TlsPlain(opt) => process_tls(conn, ingress_addr, opt, token).await,
-    }
-}
-
-async fn process_quic<RW>(
-    conn: RW,
-    ingress_addr: SocketAddr,
-    opt: &quic::ClientOptions,
-    token: CancellationToken,
-) where
-    RW: AsyncWrite + AsyncRead + Unpin + Send,
-{
     debug!("opening transport connection");
     let start = Instant::now();
 
-    let transport_conn = match quic::transport_conn(opt, |_| {}).await {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!("failed to connect to transport conn: {}", e);
-            return;
-        }
-    };
-
-    debug!("transport connected in {:?}", start.elapsed());
-    // Open the first stream that we receive and use it for transport. Other stream opens will be ignored
-    let (egress_send, egress_recv) = match transport_conn.open_bi().await {
-        Ok((wr, rd)) => (wr, rd),
-        Err(e) => {
-            error!("failed to connect to transport stream: {}", e);
-            return;
-        }
-    };
-
-    let (ingress_recv, ingress_send) = tokio::io::split(conn);
-
-    if let Err(e) = copy_bidirectional(
-        token,
-        ingress_addr,
-        ingress_recv,
-        ingress_send,
-        egress_recv,
-        egress_send,
+    let transport_conn = match BridgeConn::try_connect(
+        (*opt).clone(),
+        token.clone(),
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        |_| {},
     )
     .await
     {
-        info!("session to {ingress_addr} closed with error: {e}")
-    }
-
-    transport_conn.close(0u32.into(), b"done");
-}
-
-async fn process_tls<RW>(
-    conn: RW,
-    ingress_addr: SocketAddr,
-    opt: &tls::ClientOptions,
-    token: CancellationToken,
-) where
-    RW: AsyncWrite + AsyncRead + Unpin + Send,
-{
-    debug!("opening transport connection");
-    let start = Instant::now();
-
-    let transport_conn = match tls::transport_conn(opt).await {
         Ok(conn) => conn,
         Err(e) => {
             error!("failed to connect to transport conn: {}", e);
@@ -199,9 +146,13 @@ async fn process_tls<RW>(
         }
     };
 
-    debug!("transport connected in {:?}", start.elapsed());
+    debug!(
+        "{} transport connected in {:?}",
+        transport_conn.params().transport_name(),
+        start.elapsed()
+    );
 
-    let (egress_recv, egress_send) = tokio::io::split(transport_conn);
+    let (egress_recv, egress_send) = transport_conn.into_parts();
     let (ingress_recv, ingress_send) = tokio::io::split(conn);
 
     if let Err(e) = copy_bidirectional(
