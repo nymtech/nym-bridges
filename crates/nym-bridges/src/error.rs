@@ -20,8 +20,26 @@ pub enum TransportError {
     #[error("quic proto error: {0}")]
     QuicProto(#[from] quinn::ConnectionError),
 
+    #[error("quic crypto config error: {0}")]
+    QuicCrypto(#[from] quinn_proto::crypto::rustls::NoInitialCipherSuite),
+
     #[error("transport socket io error")]
     SocketIo(#[source] std::io::Error),
+
+    #[error("other io error")]
+    Io(#[from] std::io::Error),
+
+    #[error("tls error: {0}")]
+    Tls(#[from] rustls::Error),
+
+    #[error("certificate generation error: {0}")]
+    Cert(#[from] rcgen::Error),
+
+    #[error("pem decode error: {0}")]
+    Pem(#[from] rustls_pki_types::pem::Error),
+
+    #[error("base64 decode error: {0}")]
+    Base64(#[from] base64::DecodeError),
 
     #[error("insufficient or broken transport params: {0}")]
     Config(String),

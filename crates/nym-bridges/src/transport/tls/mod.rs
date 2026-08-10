@@ -1,6 +1,7 @@
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::os::fd::{AsRawFd, RawFd};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use ed25519_dalek::VerifyingKey;
@@ -45,22 +46,22 @@ impl Default for ServerConfig {
 }
 
 impl ServerConfig {
-    fn get_crypto_source(&self) -> Result<ServerConfigSource> {
+    fn get_crypto_source(&self) -> Result<ServerConfigSource, TransportError> {
         // parse either key or file
         if let Some(ref base64_key) = self.identity_key {
             ServerConfigSource::from_identity_base64(base64_key)
         } else if let Some(ref key_path) = self.private_ed25519_identity_key_file {
             ServerConfigSource::from_pkcs8_pem_file(key_path)
         } else {
-            Err(anyhow!("no crypto source provided"))
+            Err(TransportError::config_err("no crypto source provided"))
         }
     }
 
-    fn build_server_config(&self) -> Result<rustls::ServerConfig> {
+    fn build_server_config(&self) -> Result<rustls::ServerConfig, TransportError> {
         self.get_crypto_source()?.into_server_config()
     }
 
-    pub fn get_id_pubkey(&self) -> Result<String> {
+    pub fn get_id_pubkey(&self) -> Result<String, TransportError> {
         let crypto_source = self.get_crypto_source()?;
 
         let public_id = crypto_source.public_identity();
@@ -68,7 +69,7 @@ impl ServerConfig {
     }
 }
 
-pub fn create_listener(options: &ServerConfig) -> Result<TlsAcceptor> {
+pub fn create_listener(options: &ServerConfig) -> Result<TlsAcceptor, TransportError> {
     let server_crypto = options.build_server_config()?;
 
     Ok(TlsAcceptor::from(Arc::new(server_crypto)))
@@ -114,13 +115,11 @@ impl InnerClientOptions {
 
 pub async fn transport_conn(
     options: &ClientOptions,
-) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
+    #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl FnOnce(RawFd),
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, TransportError> {
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
-
-    let mut bytes = [0u8; ed25519_dalek::PUBLIC_KEY_LENGTH];
-    BASE64_STANDARD.decode_slice(inner_options.id_pubkey, &mut bytes)?;
-    let verif_key = VerifyingKey::from_bytes(&bytes)?;
+    let verif_key = inner_options.id_pubkey;
 
     let crypto_provider = rustls::crypto::CryptoProvider::get_default()
         .unwrap_or(&Arc::new(rustls::crypto::ring::default_provider()))
@@ -151,8 +150,8 @@ pub async fn transport_conn(
     let sni = ServerName::try_from(host).unwrap();
 
     let stream = TcpStream::connect(&inner_options.addresses[..]).await?;
-    connector
-        .connect(sni, stream)
-        .await
-        .context("tls transport establishment failed")
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    on_socket_open(stream.as_raw_fd());
+
+    Ok(connector.connect(sni, stream).await?)
 }

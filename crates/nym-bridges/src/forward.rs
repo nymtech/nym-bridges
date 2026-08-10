@@ -41,6 +41,7 @@ use tokio_util::{codec::LengthDelimitedCodec, sync::CancellationToken};
 use tracing::*;
 
 use crate::connection::BridgeConn;
+use crate::connection::TransportCloser;
 use crate::connection::make_socket;
 use crate::error::TransportError;
 
@@ -155,13 +156,16 @@ where
     // allocate buffers of mtu size, and take ownership to ensure they can't be resized anymore
     let mut dn_buf = BytesMut::with_capacity(mtu as usize);
 
-    loop {
+    let result = loop {
         tokio::select! {
             res = peer.recv(&sock, &mut dn_buf, fwd_addr) => {
-                let (len, src) = res.map_err(|e| {
-                    error!("error receiving from forward socket: {e}");
-                    e
-                })?;
+                let (len, src) = match res {
+                    Ok(v) => v,
+                    Err(e) => {
+                        error!("error receiving from forward socket: {e}");
+                        break Err(e);
+                    }
+                };
 
                 if !address_match(fwd_addr, src) {
                     debug!("received {len}B from alt addr {src} -- ignoring");
@@ -174,10 +178,10 @@ where
                 }
 
                 trace!(" <-{fwd_addr} read {len}B");
-                framed_writer.send(dn_buf.copy_to_bytes(len)).await.map_err(|e| {
+                if let Err(e) = framed_writer.send(dn_buf.copy_to_bytes(len)).await {
                     error!("error sending to transport connection: {e}");
-                    e
-                })?;
+                    break Err(e);
+                }
                 trace!(" {tr_label}<- wrote {len}B");
 
                 //reset the buffer without any new allocations.
@@ -188,11 +192,19 @@ where
             }
             _ = token.cancelled() => {
                 debug!("end io copy from {fwd_addr}<->{tr_label}");
-                break;
+                break Ok(());
             }
         }
+    };
+
+    // Always attempt a clean shutdown of the transport write side so a proper
+    // TLS close_notify (or transport-equivalent) is sent instead of just
+    // dropping the socket, regardless of why the loop above ended.
+    if let Err(e) = framed_writer.close().await {
+        debug!("error closing transport connection: {e}");
     }
-    Ok(())
+
+    result
 }
 
 /// Forwards length-prefixed frames read from `framed_reader` out to `fwd_addr`
@@ -328,6 +340,7 @@ impl UdpForwarder {
             tokio::spawn(initiator::process_udp(
                 egress_conn.reader,
                 egress_conn.writer,
+                egress_conn.closer,
                 socket.clone(),
                 ETHERNET_V2_MTU,
                 close_tx,
@@ -350,11 +363,14 @@ pub mod initiator {
     /// which case the function returns having done nothing further. Once the
     /// peer address is established, spawns the steady-state forwarding tasks
     /// and runs until either side exits or `token` is cancelled, cancelling the
-    /// other task in turn. `close_tx`, if provided, is signalled once the
-    /// forwarder has shut down.
+    /// other task in turn. `closer` is closed on every exit path, so the
+    /// underlying transport connection (not just the `reader`/`writer` split
+    /// from it) always ends cleanly. `close_tx`, if provided, is signalled
+    /// once the forwarder has shut down.
     pub async fn process_udp<R, W>(
         reader: R,
         writer: W,
+        closer: Box<dyn TransportCloser>,
         sock: Arc<UdpSocket>,
         mtu: u16,
         // close_hook: Option<fn(SocketAddr)>,
@@ -411,6 +427,7 @@ pub mod initiator {
         };
 
         let Some(fwd_addr) = fwd_addr else {
+            tokio::spawn(closer.close());
             if let Some(tx) = close_tx {
                 tx.send(()).ok();
             }
@@ -419,6 +436,7 @@ pub mod initiator {
 
         if let Err(e) = sock.connect(fwd_addr).await {
             error!("udp sock config failure: {e}");
+            tokio::spawn(closer.close());
             if let Some(tx) = close_tx {
                 tx.send(()).ok();
             }
@@ -446,6 +464,14 @@ pub mod initiator {
             token,
         )
         .await;
+
+        // End the underlying transport connection now that forwarding is done
+        // with it -- see `TransportCloser` for why this is more than just the
+        // write-half shutdown `udp_to_transport_task` already does, and why
+        // it's spawned rather than awaited here (it may need to wait on the
+        // peer, which we don't want to block the forwarder's own shutdown on;
+        // `TransportCloser` impls are responsible for bounding that wait).
+        tokio::spawn(closer.close());
 
         if let Some(tx) = close_tx {
             tx.send(()).ok();

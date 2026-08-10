@@ -7,9 +7,9 @@ version = "0"
 
 [[transport_cfg.transports]]
 
-transport_type = "quic_plain"
+transport_type = "tls_plain"
 
 [transport_cfg.transports.args]
-addresses = ["192.168.100.3:4433"]
+addresses = ["192.168.100.3:4443"]
 id_pubkey = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="
 host = "tls-test.domain.com"
