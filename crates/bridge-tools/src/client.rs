@@ -177,7 +177,7 @@ pub async fn copy_bidirectional<IR, IS, ER, ES>(
     mut ingress_send: IS,
     mut egress_recv: ER,
     mut egress_send: ES,
-    egress_closer: TransportCloser,
+    egress_closer: Box<dyn TransportCloser>,
 ) -> Result<()>
 where
     IR: AsyncRead + Unpin + Send,
@@ -215,8 +215,9 @@ where
         error!("failed to close egress connection: {}", e);
     });
     // Beyond shutting down the byte-stream above, some transports (QUIC) need
-    // an explicit connection-level close -- see `TransportCloser`.
-    egress_closer.close();
+    // more work to end the underlying connection -- see `TransportCloser`.
+    // Spawned rather than awaited since it may need to wait on the peer.
+    tokio::spawn(egress_closer.close());
 
     // Ok(session)
     Ok(())

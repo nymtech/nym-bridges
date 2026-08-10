@@ -32,7 +32,7 @@ pub struct BridgeConn {
     pub(crate) endpoint: SocketAddr,
     pub(crate) reader: Box<dyn AsyncRead + Send + Unpin>,
     pub(crate) writer: Box<dyn AsyncWrite + Send + Unpin>,
-    pub(crate) closer: TransportCloser,
+    pub(crate) closer: Box<dyn TransportCloser>,
 }
 
 /// Ends the underlying transport connection once a caller is done forwarding
@@ -40,24 +40,22 @@ pub struct BridgeConn {
 /// those halves, since for some transports the connection outlives the
 /// stream they were split from.
 ///
-/// For TLS, the stream *is* the connection, so shutting down the write half
-/// (which sends a `close_notify`) already ends the connection cleanly; `close`
-/// is a no-op here. For QUIC, `reader`/`writer` are only one multiplexed
-/// stream on a [`quinn::Connection`] that outlives it, and dropping the last
-/// handle to that stream (without this) makes quinn close the connection
-/// implicitly, with no application code or reason -- which peers report as a
-/// bare "connection lost". This mirrors what the server side already does
-/// explicitly for its inbound QUIC connections (see `handle_quic_connection_inner`).
-pub enum TransportCloser {
-    Tls,
-    Quic(quinn::Connection),
+/// Each transport implements this with whatever it needs beyond a plain
+/// write-half shutdown. For TLS, the stream *is* the connection, so shutting
+/// down the write half (which sends a `close_notify`) already ends the
+/// connection cleanly and this is a no-op. For QUIC, `reader`/`writer` are
+/// only one multiplexed stream on a [`quinn::Connection`] that outlives it --
+/// see the `quinn::Connection` impl for why closing it is not just "call
+/// `close()`".
+pub trait TransportCloser: Send {
+    fn close(self: Box<Self>) -> futures::future::BoxFuture<'static, ()>;
 }
 
-impl TransportCloser {
-    pub fn close(self) {
-        if let TransportCloser::Quic(conn) = self {
-            conn.close(0u32.into(), b"done");
-        }
+/// The TLS stream and connection are one and the same, so there's nothing
+/// left to do beyond the write-half shutdown callers already perform.
+impl TransportCloser for () {
+    fn close(self: Box<Self>) -> futures::future::BoxFuture<'static, ()> {
+        Box::pin(async {})
     }
 }
 
@@ -92,7 +90,7 @@ impl BridgeConn {
                     writer: Box::new(writer),
                     params,
                     endpoint,
-                    closer: TransportCloser::Quic(conn),
+                    closer: Box::new(conn),
                 })
             }
             ClientConfig::TlsPlain(ref opts) => {
@@ -118,7 +116,7 @@ impl BridgeConn {
                     writer: Box::new(writer),
                     params,
                     endpoint,
-                    closer: TransportCloser::Tls,
+                    closer: Box::new(()),
                 })
             }
         }
@@ -145,7 +143,7 @@ impl BridgeConn {
     ) -> (
         Box<dyn AsyncRead + Send + Unpin>,
         Box<dyn AsyncWrite + Send + Unpin>,
-        TransportCloser,
+        Box<dyn TransportCloser>,
     ) {
         (self.reader, self.writer, self.closer)
     }

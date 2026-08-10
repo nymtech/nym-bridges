@@ -43,6 +43,17 @@ lazy_static::lazy_static! {
     static ref QUIC_SESSION_IDLE_TIMEOUT: IdleTimeout = IdleTimeout::from(quinn::VarInt::from_u32(60_000));
 }
 
+/// How long the client waits for the server to close a finished connection on
+/// its own (see the `TransportCloser` impl below) before giving up and
+/// forcing the close itself.
+///
+/// This is deliberately independent of [`QUIC_SESSION_IDLE_TIMEOUT`]: idle
+/// timeout is suppressed by [`QUIC_SESSION_KEEPALIVE_INTERVAL`] for as long as
+/// the connection object is alive, precisely so healthy-but-quiet tunnels
+/// don't get dropped -- which means it would never fire here either, and
+/// can't be relied on as a backstop for a peer that never closes.
+const GRACEFUL_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServerConfig {
     /// Enable stateless retries
@@ -114,6 +125,34 @@ pub fn create_endpoint(options: &ServerConfig) -> Result<quinn::Endpoint, Transp
 // ====================================[ Client Side ]====================================
 
 pub use crate::types::quic::ClientOptions;
+
+/// Only the side that _received_ data last can be sure it has all been
+/// delivered to the application -- see [`quinn::Connection::close`]'s docs
+/// under "Gracefully closing a connection". If we closed proactively here
+/// instead, our peer could observe our CONNECTION_CLOSE frame before it has
+/// drained everything we already sent it, and would report that as a bare
+/// connection-lost error rather than a clean end of stream.
+///
+/// So instead of closing, wait for the peer to close first -- it does this
+/// once its own forwarding loop finishes draining what we sent (see the
+/// server's `handle_quic_connection_inner`). If that doesn't happen within
+/// [`GRACEFUL_CLOSE_TIMEOUT`], force the close ourselves rather than leaking
+/// the connection: `max_idle_timeout` is *not* a backstop here, since
+/// `keep_alive_interval` keeps this connection looking active (and thus
+/// exempt from idle timeout) for as long as we hold it open waiting.
+impl crate::connection::TransportCloser for quinn::Connection {
+    fn close(self: Box<Self>) -> futures::future::BoxFuture<'static, ()> {
+        Box::pin(async move {
+            if tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, self.closed())
+                .await
+                .is_err()
+            {
+                debug!("peer did not close connection in time, forcing close");
+                quinn::Connection::close(&self, 0u32.into(), b"done");
+            }
+        })
+    }
+}
 
 struct InnerClientOptions {
     pub addresses: Vec<SocketAddr>,

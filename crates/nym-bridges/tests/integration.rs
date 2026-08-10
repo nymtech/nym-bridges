@@ -13,7 +13,6 @@ use std::sync::Once;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use nym_bridges::connection::TransportCloser;
 use nym_bridges::forward::initiator::process_udp;
 // use nym_bridges::session::Session;
 
@@ -146,7 +145,7 @@ async fn udp_length_delimited() {
     threads.spawn(process_udp(
         ct_conn_rd,
         ct_conn_wr,
-        TransportCloser::Tls,
+        Box::new(()),
         client_udp1.clone(),
         // client_session,
         mtu,
@@ -158,7 +157,7 @@ async fn udp_length_delimited() {
     threads.spawn(process_udp(
         srv_conn_rd,
         srv_conn_wr,
-        TransportCloser::Tls,
+        Box::new(()),
         server_udp1.clone(),
         // server_session,
         mtu,

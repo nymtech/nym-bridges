@@ -370,7 +370,7 @@ pub mod initiator {
     pub async fn process_udp<R, W>(
         reader: R,
         writer: W,
-        closer: TransportCloser,
+        closer: Box<dyn TransportCloser>,
         sock: Arc<UdpSocket>,
         mtu: u16,
         // close_hook: Option<fn(SocketAddr)>,
@@ -427,7 +427,7 @@ pub mod initiator {
         };
 
         let Some(fwd_addr) = fwd_addr else {
-            closer.close();
+            tokio::spawn(closer.close());
             if let Some(tx) = close_tx {
                 tx.send(()).ok();
             }
@@ -436,7 +436,7 @@ pub mod initiator {
 
         if let Err(e) = sock.connect(fwd_addr).await {
             error!("udp sock config failure: {e}");
-            closer.close();
+            tokio::spawn(closer.close());
             if let Some(tx) = close_tx {
                 tx.send(()).ok();
             }
@@ -465,11 +465,13 @@ pub mod initiator {
         )
         .await;
 
-        // Explicitly close the underlying transport connection now that
-        // forwarding is done with it -- see `TransportCloser` for why this is
-        // needed in addition to the write-half shutdown `udp_to_transport_task`
-        // already does.
-        closer.close();
+        // End the underlying transport connection now that forwarding is done
+        // with it -- see `TransportCloser` for why this is more than just the
+        // write-half shutdown `udp_to_transport_task` already does, and why
+        // it's spawned rather than awaited here (it may need to wait on the
+        // peer, which we don't want to block the forwarder's own shutdown on;
+        // `TransportCloser` impls are responsible for bounding that wait).
+        tokio::spawn(closer.close());
 
         if let Some(tx) = close_tx {
             tx.send(()).ok();
