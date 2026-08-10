@@ -12,7 +12,7 @@ use tracing::*;
 use tracing::{error, info};
 
 use nym_bridges::config::{ClientConfig, PersistedClientConfig};
-use nym_bridges::connection::BridgeConn;
+use nym_bridges::connection::{BridgeConn, TransportCloser};
 use nym_bridges::types::TransportAssociation;
 
 #[derive(Debug, Parser, PartialEq)]
@@ -152,7 +152,7 @@ async fn process<RW>(
         start.elapsed()
     );
 
-    let (egress_recv, egress_send) = transport_conn.into_parts();
+    let (egress_recv, egress_send, egress_closer) = transport_conn.into_parts();
     let (ingress_recv, ingress_send) = tokio::io::split(conn);
 
     if let Err(e) = copy_bidirectional(
@@ -162,6 +162,7 @@ async fn process<RW>(
         ingress_send,
         egress_recv,
         egress_send,
+        egress_closer,
     )
     .await
     {
@@ -176,6 +177,7 @@ pub async fn copy_bidirectional<IR, IS, ER, ES>(
     mut ingress_send: IS,
     mut egress_recv: ER,
     mut egress_send: ES,
+    egress_closer: TransportCloser,
 ) -> Result<()>
 where
     IR: AsyncRead + Unpin + Send,
@@ -212,6 +214,9 @@ where
     egress_send.shutdown().await.unwrap_or_else(|e| {
         error!("failed to close egress connection: {}", e);
     });
+    // Beyond shutting down the byte-stream above, some transports (QUIC) need
+    // an explicit connection-level close -- see `TransportCloser`.
+    egress_closer.close();
 
     // Ok(session)
     Ok(())

@@ -170,9 +170,9 @@ async fn transport_session(
         start.elapsed()
     );
 
-    let (rd, wr) = conn.into_parts();
+    let (rd, wr, closer) = conn.into_parts();
 
-    process_udp(rd, wr, socket, 1500, None, token).await;
+    process_udp(rd, wr, closer, socket, 1500, None, token).await;
     info!("end session");
 
     Ok(())
