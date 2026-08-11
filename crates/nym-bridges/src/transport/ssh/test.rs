@@ -59,7 +59,7 @@ impl russh::client::Handler for AcceptAnyHostKey {
     async fn check_server_key(
         &mut self,
         _server_public_key: &ssh_key::PublicKey,
-    ) -> Result<bool, Self::Error> {
+    ) -> std::result::Result<bool, Self::Error> {
         Ok(true)
     }
 }
@@ -242,7 +242,7 @@ async fn server_sends_configured_banner() {
         async fn check_server_key(
             &mut self,
             _server_public_key: &ssh_key::PublicKey,
-        ) -> Result<bool, Self::Error> {
+        ) -> std::result::Result<bool, Self::Error> {
             Ok(true)
         }
 
@@ -250,7 +250,7 @@ async fn server_sends_configured_banner() {
             &mut self,
             banner: &str,
             _session: &mut russh::client::Session,
-        ) -> Result<(), Self::Error> {
+        ) -> std::result::Result<(), Self::Error> {
             if let Some(tx) = self.banner_tx.take() {
                 let _ = tx.send(banner.to_string());
             }

@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
-use crate::transport::{quic, tls, ssh};\
+use crate::transport::{quic, ssh, tls};
 use crate::{config::ClientConfig, error::TransportError};
 use nym_bridges_types::TransportAssociation;
 

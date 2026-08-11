@@ -1,6 +1,5 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, anyhow};
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use russh::keys::ssh_key;
@@ -12,7 +11,7 @@ use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tracing::*;
 
-use crate::error::TransportError;
+use crate::error::{Result, TransportError};
 use crate::transport::tls::certs::ServerConfigSource;
 
 const DEFAULT_SOCK_ADDR: &str = "[::]:4422";
@@ -73,7 +72,7 @@ impl ServerConfig {
         } else if let Some(ref key_path) = self.private_ed25519_identity_key_file {
             ServerConfigSource::from_pkcs8_pem_file(key_path)
         } else {
-            Err(anyhow!("no crypto source provided"))
+            Err(TransportError::config_err("no crypto source provided"))
         }
     }
 
@@ -139,7 +138,7 @@ impl ConnectionHandler {
     fn deny_channel_request(
         session: &mut russh::server::Session,
         channel: ChannelId,
-    ) -> Result<(), russh::Error> {
+    ) -> std::result::Result<(), russh::Error> {
         session.channel_failure(channel)
     }
 }
@@ -147,11 +146,14 @@ impl ConnectionHandler {
 impl russh::server::Handler for ConnectionHandler {
     type Error = russh::Error;
 
-    async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
+    async fn authentication_banner(&mut self) -> std::result::Result<Option<String>, Self::Error> {
         Ok(self.banner.clone())
     }
 
-    async fn auth_none(&mut self, user: &str) -> Result<russh::server::Auth, Self::Error> {
+    async fn auth_none(
+        &mut self,
+        user: &str,
+    ) -> std::result::Result<russh::server::Auth, Self::Error> {
         if user == self.expected_username {
             Ok(russh::server::Auth::Accept)
         } else {
@@ -164,7 +166,7 @@ impl russh::server::Handler for ConnectionHandler {
         channel: Channel<russh::server::Msg>,
         reply: russh::server::ChannelOpenHandle,
         _session: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
+    ) -> std::result::Result<(), Self::Error> {
         reply.accept().await;
         if let Some(tx) = self.channel_tx.take() {
             let _ = tx.send(channel);
@@ -179,7 +181,7 @@ impl russh::server::Handler for ConnectionHandler {
         _originator_port: u32,
         reply: russh::server::ChannelOpenHandle,
         _session: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
+    ) -> std::result::Result<(), Self::Error> {
         reply
             .reject(ChannelOpenFailure::AdministrativelyProhibited)
             .await;
@@ -195,7 +197,7 @@ impl russh::server::Handler for ConnectionHandler {
         _originator_port: u32,
         reply: russh::server::ChannelOpenHandle,
         _session: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
+    ) -> std::result::Result<(), Self::Error> {
         reply
             .reject(ChannelOpenFailure::AdministrativelyProhibited)
             .await;
@@ -207,7 +209,7 @@ impl russh::server::Handler for ConnectionHandler {
         _address: &str,
         _port: &mut u32,
         _session: &mut russh::server::Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> std::result::Result<bool, Self::Error> {
         Ok(false)
     }
 
@@ -221,7 +223,7 @@ impl russh::server::Handler for ConnectionHandler {
         _pix_height: u32,
         _modes: &[(Pty, u32)],
         session: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
+    ) -> std::result::Result<(), Self::Error> {
         Self::deny_channel_request(session, channel)
     }
 
@@ -233,7 +235,7 @@ impl russh::server::Handler for ConnectionHandler {
         _x11_auth_cookie: &str,
         _x11_screen_number: u32,
         session: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
+    ) -> std::result::Result<(), Self::Error> {
         Self::deny_channel_request(session, channel)
     }
 
@@ -241,7 +243,7 @@ impl russh::server::Handler for ConnectionHandler {
         &mut self,
         channel: ChannelId,
         session: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
+    ) -> std::result::Result<(), Self::Error> {
         Self::deny_channel_request(session, channel)
     }
 
@@ -250,7 +252,7 @@ impl russh::server::Handler for ConnectionHandler {
         channel: ChannelId,
         _data: &[u8],
         session: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
+    ) -> std::result::Result<(), Self::Error> {
         Self::deny_channel_request(session, channel)
     }
 
@@ -259,7 +261,7 @@ impl russh::server::Handler for ConnectionHandler {
         channel: ChannelId,
         _name: &str,
         session: &mut russh::server::Session,
-    ) -> Result<(), Self::Error> {
+    ) -> std::result::Result<(), Self::Error> {
         Self::deny_channel_request(session, channel)
     }
 }
@@ -275,7 +277,7 @@ pub async fn accept(
     expected_username: String,
     banner: Option<String>,
     stream: TcpStream,
-) -> Result<ServerChannelStream, TransportError> {
+) -> Result<ServerChannelStream> {
     let (channel_tx, channel_rx) = oneshot::channel();
     let handler = ConnectionHandler {
         channel_tx: Some(channel_tx),
@@ -310,7 +312,7 @@ struct InnerClientOptions {
 
 impl TryFrom<&ClientOptions> for InnerClientOptions {
     type Error = TransportError;
-    fn try_from(value: &ClientOptions) -> Result<Self, Self::Error> {
+    fn try_from(value: &ClientOptions) -> Result<Self> {
         let id_pubkey = Self::parse_base64_pubkey(&value.id_pubkey)?;
 
         Ok(Self {
@@ -322,7 +324,7 @@ impl TryFrom<&ClientOptions> for InnerClientOptions {
 }
 
 impl InnerClientOptions {
-    fn parse_base64_pubkey(key: impl AsRef<str>) -> Result<VerifyingKey, TransportError> {
+    fn parse_base64_pubkey(key: impl AsRef<str>) -> Result<VerifyingKey> {
         let mut pubkey_bytes = [0u8; 32];
         BASE64_STANDARD
             .decode_slice(key.as_ref(), &mut pubkey_bytes)
@@ -348,7 +350,7 @@ impl russh::client::Handler for ClientHandler {
     async fn check_server_key(
         &mut self,
         server_public_key: &ssh_key::PublicKey,
-    ) -> Result<bool, Self::Error> {
+    ) -> std::result::Result<bool, Self::Error> {
         let Some(ed25519_key) = server_public_key.key_data().ed25519() else {
             return Ok(false);
         };
@@ -356,9 +358,7 @@ impl russh::client::Handler for ClientHandler {
     }
 }
 
-pub async fn transport_conn(
-    options: &ClientOptions,
-) -> Result<ClientChannelStream, TransportError> {
+pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStream> {
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
 
@@ -386,8 +386,7 @@ pub async fn transport_conn(
     let channel = handle
         .channel_open_session()
         .await
-        .context("failed to open ssh channel")
-        .map_err(|e| TransportError::other(e.to_string()))?;
+        .map_err(|e| TransportError::other(format!("failed to open ssh channel: {e}")))?;
 
     Ok(channel.into_stream())
 }
