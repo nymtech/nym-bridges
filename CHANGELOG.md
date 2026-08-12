@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TLS transport usable from a unified BridgeConn object (https://github.com/nymtech/nym-bridges/pull/60)
 - `utoipa` support for integration against nym-sdk and nym-smoldvpn
 
+### Changed
+
+- Changed license version from GPL_v3 to dual MIT & APACHE-2.0 (https://github.com/nymtech/nym-bridges/pull/63)
 
 ### Fixed
 
