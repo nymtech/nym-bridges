@@ -17,7 +17,7 @@ edition = "2024"
 repository = "https://github.com/nymtech/nym-bridges"
 homepage = "https://nymtech.net"
 documentation = "https://nymtech.net"
-license = "GPL-3.0-only"
+license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
 
