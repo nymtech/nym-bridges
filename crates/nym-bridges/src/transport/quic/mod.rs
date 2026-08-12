@@ -9,6 +9,7 @@ use std::{
 
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
+use futures::future;
 use quinn_proto::crypto::rustls::QuicClientConfig;
 use quinn_proto::crypto::rustls::QuicServerConfig;
 use quinn_proto::{IdleTimeout, TransportConfig, congestion};
@@ -192,26 +193,58 @@ impl InnerClientOptions {
         VerifyingKey::from_bytes(&pubkey_bytes)
             .map_err(|e| TransportError::config_err(format!("bad Quic bridge public key: {e}")))
     }
-
-    fn get_ipv4(&self) -> Option<SocketAddr> {
-        self.addresses.iter().find(|s| s.is_ipv4()).cloned()
-    }
 }
 
+/// Attempt a Quic connection against every provided address concurrently, and take whichever
+/// succeeds first -- similar in spirit to "happy eyeballs" (RFC 8305), except we don't stagger
+/// the attempts since Quic's connection setup is a handful of UDP packets rather than a stateful
+/// TCP handshake, so racing all candidates up front costs little.
+///
+/// The losing attempts are dropped (and their sockets closed) once a winner completes.
 pub async fn transport_conn(
     options: &ClientOptions,
-    #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl FnOnce(RawFd),
+    #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
 ) -> Result<quinn::Connection, TransportError> {
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
 
-    let transport_endpoint = inner_options
-        .get_ipv4()
-        .ok_or(TransportError::config_err("No IPv4 endpoint provided"))?;
+    if inner_options.addresses.is_empty() {
+        return Err(TransportError::config_err("No endpoint provided"));
+    }
 
     let client_config = create_quic_config(&inner_options)?;
 
-    let bind_addr = match transport_endpoint.is_ipv4() {
+    // If no hostname is provided use the IP address of the first candidate as the SNI hostname.
+    let addr_host = inner_options.addresses[0].ip().to_string();
+    let host = options.host.as_deref().unwrap_or(&addr_host);
+
+    let attempts = inner_options.addresses.iter().map(|&addr| {
+        Box::pin(connect_one(
+            addr,
+            host,
+            client_config.clone(),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            &on_socket_open,
+        ))
+    });
+
+    let (conn, _losing_attempts) = future::select_ok(attempts).await.inspect_err(|e| {
+        warn!(
+            "failed to connect to any of {} endpoint(s): {e}",
+            inner_options.addresses.len()
+        );
+    })?;
+
+    Ok(conn)
+}
+
+async fn connect_one(
+    addr: SocketAddr,
+    host: &str,
+    client_config: quinn::ClientConfig,
+    #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: &impl Fn(RawFd),
+) -> Result<quinn::Connection, TransportError> {
+    let bind_addr = match addr.is_ipv4() {
         true => (Ipv4Addr::UNSPECIFIED, 0).into(),
         false => (Ipv6Addr::UNSPECIFIED, 0).into(),
     };
@@ -232,12 +265,8 @@ pub async fn transport_conn(
     .map_err(TransportError::SocketIo)?;
     endpoint.set_default_client_config(client_config);
 
-    // If no hostname is provided use the IP address of the remote server as the hostname.
-    let addr_host = transport_endpoint.ip().to_string();
-    let host = options.host.as_deref().unwrap_or(&addr_host);
-
     endpoint
-        .connect(transport_endpoint, host)?
+        .connect(addr, host)?
         .await
         .map_err(TransportError::QuicProto)
 }
