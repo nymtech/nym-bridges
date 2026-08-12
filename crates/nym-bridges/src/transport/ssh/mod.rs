@@ -77,9 +77,7 @@ pub struct ServerConfig {
 
     /// SSH identification string this server should present in place of the underlying SSH
     /// library's default, sent as a plaintext line at the very start of the protocol (before any
-    /// key exchange). This same value is copied into the generated client configuration so
-    /// consumers of that configuration know what to expect ahead of time. Purely for
-    /// on-the-wire fingerprint management - clients do not check or validate it.
+    /// key exchange).
     pub banner: Option<String>,
 
     /// SSH identification string that connecting clients should present in place of the

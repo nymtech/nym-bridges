@@ -142,7 +142,6 @@ async fn client_server_handshake_and_echo() {
         id_pubkey,
         username: None,
         client_auth_key,
-        banner: None,
         client_banner: None,
     };
     let mut client_stream = transport_conn(&client_opts).await.unwrap();
@@ -195,7 +194,6 @@ async fn client_rejects_mismatched_host_key() {
         id_pubkey: wrong_pubkey,
         username: None,
         client_auth_key,
-        banner: None,
         client_banner: None,
     };
     let result = transport_conn(&client_opts).await;
@@ -239,7 +237,6 @@ async fn client_rejects_mismatched_username() {
         id_pubkey,
         username: Some("wrong_user".into()),
         client_auth_key,
-        banner: None,
         client_banner: None,
     };
     let result = transport_conn(&client_opts).await;
@@ -287,7 +284,6 @@ async fn client_rejects_mismatched_auth_key() {
         id_pubkey,
         username: None,
         client_auth_key: generate_auth_key(),
-        banner: None,
         client_banner: None,
     };
     let result = transport_conn(&client_opts).await;
@@ -395,7 +391,6 @@ async fn client_presents_configured_banner_as_ssh_id() {
         id_pubkey,
         username: None,
         client_auth_key: generate_auth_key(),
-        banner: None,
         client_banner: Some("SSH-2.0-OpenSSH_9.6".into()),
     };
     // The handshake itself will fail since nothing on the other end speaks SSH past the
@@ -630,7 +625,6 @@ async fn server_honors_configured_expected_username() {
         id_pubkey: id_pubkey.clone(),
         username: Some("custom_user".into()),
         client_auth_key: client_auth_key.clone(),
-        banner: None,
         client_banner: None,
     };
     transport_conn(&matching_client)
@@ -644,7 +638,6 @@ async fn server_honors_configured_expected_username() {
         id_pubkey,
         username: None,
         client_auth_key,
-        banner: None,
         client_banner: None,
     };
     let result = transport_conn(&default_username_client).await;
