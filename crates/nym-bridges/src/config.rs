@@ -147,12 +147,17 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let addresses = ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect();
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
                     let username = cfg.expected_username.clone();
+                    let client_auth_key = cfg
+                        .client_auth_key
+                        .clone()
+                        .context("client_auth_key must be configured for the ssh transport")?;
                     let banner = cfg.banner.clone();
                     let client_banner = cfg.client_banner.clone();
                     transports.push(ClientConfig::SshPlain(ssh::ClientOptions {
                         addresses,
                         id_pubkey,
                         username,
+                        client_auth_key,
                         banner,
                         client_banner,
                     }));
@@ -274,6 +279,7 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
             identity_key: Some("fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=".into()),
             private_ed25519_identity_key_file: None,
             expected_username: Some("root".into()),
+            client_auth_key: Some("znYcb6KT1MFExHKKOYGevQErjj2t9hSd2MX6tw+P/H4=".into()),
             banner: Some("Authorized use only".into()),
             client_banner: Some("SSH-2.0-OpenSSH_9.6".into()),
         };
@@ -312,6 +318,7 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
             ],
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
             username: Some("root".into()),
+            client_auth_key: "znYcb6KT1MFExHKKOYGevQErjj2t9hSd2MX6tw+P/H4=".into(),
             banner: Some("Authorized use only".into()),
             client_banner: Some("SSH-2.0-OpenSSH_9.6".into()),
         };

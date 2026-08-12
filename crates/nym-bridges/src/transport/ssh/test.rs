@@ -3,19 +3,31 @@ use ed25519_dalek::SigningKey;
 use russh::ChannelMsg;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Generate a fresh base64-encoded ed25519 private key for use as a test `client_auth_key`. The
+/// same string must be configured on both the server (`ServerConfig::client_auth_key`) and the
+/// client (`ClientOptions::client_auth_key`) attempting to authenticate against it.
+fn generate_auth_key() -> String {
+    BASE64_STANDARD.encode(SigningKey::generate(&mut rand::rng()).to_bytes())
+}
+
 /// Spin up a real server, in the background, listening on an ephemeral loopback port. Each
 /// accepted connection is driven by the production [`ConnectionHandler`] via [`accept`], so
 /// these tests exercise the actual restrictions a connecting client is subject to rather than
 /// a re-implementation of them. Connections that never open a "session" channel simply leave
 /// their background task parked forever, which is harmless for a test.
-async fn spawn_test_server() -> SocketAddr {
+///
+/// Returns the address to connect to and the `client_auth_key` a client must present to
+/// authenticate, for use with [`connect_test_client`].
+async fn spawn_test_server() -> (SocketAddr, String) {
     let signing_key = SigningKey::generate(&mut rand::rng());
+    let client_auth_key = generate_auth_key();
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
         identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
         private_ed25519_identity_key_file: None,
         expected_username: None,
+        client_auth_key: Some(client_auth_key.clone()),
         banner: None,
         client_banner: None,
     };
@@ -23,6 +35,7 @@ async fn spawn_test_server() -> SocketAddr {
     let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let expected_username = server_cfg.expected_username();
+    let expected_client_pubkey = server_cfg.client_auth_pubkey().unwrap();
     let config = create_listener(&server_cfg).unwrap();
 
     tokio::spawn(async move {
@@ -33,7 +46,9 @@ async fn spawn_test_server() -> SocketAddr {
             let config = config.clone();
             let expected_username = expected_username.clone();
             tokio::spawn(async move {
-                let Ok(mut chan_stream) = accept(config, expected_username, stream).await else {
+                let Ok(mut chan_stream) =
+                    accept(config, expected_username, expected_client_pubkey, stream).await
+                else {
                     return;
                 };
                 // Keep the channel (and thus the session) alive until the client closes it,
@@ -45,7 +60,7 @@ async fn spawn_test_server() -> SocketAddr {
         }
     });
 
-    addr
+    (addr, client_auth_key)
 }
 
 /// Client-side handler for tests that only care about server-side restrictions: it accepts
@@ -64,16 +79,25 @@ impl russh::client::Handler for AcceptAnyHostKey {
     }
 }
 
-async fn connect_test_client(addr: SocketAddr) -> russh::client::Handle<AcceptAnyHostKey> {
+async fn connect_test_client(
+    addr: SocketAddr,
+    client_auth_key: &str,
+) -> russh::client::Handle<AcceptAnyHostKey> {
     let config = Arc::new(russh::client::Config::default());
     let mut handle = russh::client::connect(config, addr, AcceptAnyHostKey)
         .await
         .expect("ssh handshake failed");
+    let private_key = InnerClientOptions::parse_base64_auth_key(client_auth_key)
+        .expect("test auth key should decode");
+    let auth_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), None);
     let auth = handle
-        .authenticate_none(DEFAULT_SSH_USER)
+        .authenticate_publickey(DEFAULT_SSH_USER, auth_key)
         .await
         .expect("auth request failed");
-    assert!(auth.success(), "server should accept `none` auth");
+    assert!(
+        auth.success(),
+        "server should accept the pre-shared publickey auth"
+    );
     handle
 }
 
@@ -83,6 +107,7 @@ async fn client_server_handshake_and_echo() {
     let verifying_key = signing_key.verifying_key();
     let identity_key = BASE64_STANDARD.encode(signing_key.to_bytes());
     let id_pubkey = BASE64_STANDARD.encode(verifying_key.to_bytes());
+    let client_auth_key = generate_auth_key();
 
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
@@ -90,6 +115,7 @@ async fn client_server_handshake_and_echo() {
         identity_key: Some(identity_key),
         private_ed25519_identity_key_file: None,
         expected_username: None,
+        client_auth_key: Some(client_auth_key.clone()),
         banner: None,
         client_banner: None,
     };
@@ -97,11 +123,14 @@ async fn client_server_handshake_and_echo() {
     let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let expected_username = server_cfg.expected_username();
+    let expected_client_pubkey = server_cfg.client_auth_pubkey().unwrap();
     let config = create_listener(&server_cfg).unwrap();
 
     let server_task = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let mut chan_stream = accept(config, expected_username, stream).await.unwrap();
+        let mut chan_stream = accept(config, expected_username, expected_client_pubkey, stream)
+            .await
+            .unwrap();
 
         let mut buf = [0u8; 5];
         chan_stream.read_exact(&mut buf).await.unwrap();
@@ -112,6 +141,7 @@ async fn client_server_handshake_and_echo() {
         addresses: vec![addr],
         id_pubkey,
         username: None,
+        client_auth_key,
         banner: None,
         client_banner: None,
     };
@@ -129,6 +159,7 @@ async fn client_server_handshake_and_echo() {
 async fn client_rejects_mismatched_host_key() {
     let signing_key = SigningKey::generate(&mut rand::rng());
     let identity_key = BASE64_STANDARD.encode(signing_key.to_bytes());
+    let client_auth_key = generate_auth_key();
 
     // Client is configured to pin a *different* identity than the server actually presents.
     let wrong_pubkey = BASE64_STANDARD.encode(
@@ -143,6 +174,7 @@ async fn client_rejects_mismatched_host_key() {
         identity_key: Some(identity_key),
         private_ed25519_identity_key_file: None,
         expected_username: None,
+        client_auth_key: Some(client_auth_key.clone()),
         banner: None,
         client_banner: None,
     };
@@ -150,17 +182,19 @@ async fn client_rejects_mismatched_host_key() {
     let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let expected_username = server_cfg.expected_username();
+    let expected_client_pubkey = server_cfg.client_auth_pubkey().unwrap();
     let config = create_listener(&server_cfg).unwrap();
 
     let server_task = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let _ = accept(config, expected_username, stream).await;
+        let _ = accept(config, expected_username, expected_client_pubkey, stream).await;
     });
 
     let client_opts = ClientOptions {
         addresses: vec![addr],
         id_pubkey: wrong_pubkey,
         username: None,
+        client_auth_key,
         banner: None,
         client_banner: None,
     };
@@ -176,6 +210,7 @@ async fn client_rejects_mismatched_username() {
     let verifying_key = signing_key.verifying_key();
     let identity_key = BASE64_STANDARD.encode(signing_key.to_bytes());
     let id_pubkey = BASE64_STANDARD.encode(verifying_key.to_bytes());
+    let client_auth_key = generate_auth_key();
 
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
@@ -183,6 +218,7 @@ async fn client_rejects_mismatched_username() {
         identity_key: Some(identity_key),
         private_ed25519_identity_key_file: None,
         expected_username: None,
+        client_auth_key: Some(client_auth_key.clone()),
         banner: None,
         client_banner: None,
     };
@@ -190,17 +226,19 @@ async fn client_rejects_mismatched_username() {
     let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let expected_username = server_cfg.expected_username();
+    let expected_client_pubkey = server_cfg.client_auth_pubkey().unwrap();
     let config = create_listener(&server_cfg).unwrap();
 
     let server_task = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let _ = accept(config, expected_username, stream).await;
+        let _ = accept(config, expected_username, expected_client_pubkey, stream).await;
     });
 
     let client_opts = ClientOptions {
         addresses: vec![addr],
         id_pubkey,
         username: Some("wrong_user".into()),
+        client_auth_key,
         banner: None,
         client_banner: None,
     };
@@ -208,6 +246,271 @@ async fn client_rejects_mismatched_username() {
     assert!(result.is_err());
 
     let _ = server_task.await;
+}
+
+/// Confirms a client presenting the wrong `client_auth_key` - i.e. a signature from a keypair
+/// other than the one the server was configured to expect - is rejected, even when it otherwise
+/// pins the server's host key and presents the correct username. This is the actual security
+/// gate now that `none` auth is disallowed.
+#[tokio::test]
+async fn client_rejects_mismatched_auth_key() {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let verifying_key = signing_key.verifying_key();
+    let identity_key = BASE64_STANDARD.encode(signing_key.to_bytes());
+    let id_pubkey = BASE64_STANDARD.encode(verifying_key.to_bytes());
+
+    let server_cfg = ServerConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        connection_limit: None,
+        identity_key: Some(identity_key),
+        private_ed25519_identity_key_file: None,
+        expected_username: None,
+        client_auth_key: Some(generate_auth_key()),
+        banner: None,
+        client_banner: None,
+    };
+
+    let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let expected_username = server_cfg.expected_username();
+    let expected_client_pubkey = server_cfg.client_auth_pubkey().unwrap();
+    let config = create_listener(&server_cfg).unwrap();
+
+    let server_task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let _ = accept(config, expected_username, expected_client_pubkey, stream).await;
+    });
+
+    // Client has its own, different auth key rather than the one the server expects.
+    let client_opts = ClientOptions {
+        addresses: vec![addr],
+        id_pubkey,
+        username: None,
+        client_auth_key: generate_auth_key(),
+        banner: None,
+        client_banner: None,
+    };
+    let result = transport_conn(&client_opts).await;
+    assert!(
+        result.is_err(),
+        "client presenting a different auth keypair than the server expects should be rejected"
+    );
+
+    let _ = server_task.await;
+}
+
+/// Confirms the `none` auth method is explicitly disallowed (soft-rejected, per
+/// [`ConnectionHandler::auth_none`]) while `publickey` against the pre-shared `client_auth_key`
+/// still works on the very same connection afterward - i.e. `none` being turned away doesn't
+/// itself end the session, since standard SSH clients commonly probe with it first.
+#[tokio::test]
+async fn server_disallows_none_auth_but_still_allows_publickey() {
+    let (addr, client_auth_key) = spawn_test_server().await;
+
+    let config = Arc::new(russh::client::Config::default());
+    let mut handle = russh::client::connect(config, addr, AcceptAnyHostKey)
+        .await
+        .expect("ssh handshake failed");
+
+    let none_auth = handle
+        .authenticate_none(DEFAULT_SSH_USER)
+        .await
+        .expect("none auth request failed");
+    assert!(
+        !none_auth.success(),
+        "`none` auth should be disallowed, not accepted"
+    );
+
+    let private_key = InnerClientOptions::parse_base64_auth_key(&client_auth_key)
+        .expect("test auth key should decode");
+    let auth_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), None);
+    let publickey_auth = handle
+        .authenticate_publickey(DEFAULT_SSH_USER, auth_key)
+        .await
+        .expect("publickey auth request failed");
+    assert!(
+        publickey_auth.success(),
+        "publickey auth should still succeed on the same connection after `none` was rejected"
+    );
+}
+
+/// Confirms `password` auth - not just `none` - is rejected too, and that (like `none`) it's a
+/// soft rejection rather than a hard disconnect: `publickey` still works on the same connection
+/// afterward. `keyboard-interactive` and OpenSSH certificate auth follow the identical code path
+/// in `ConnectionHandler` and aren't separately exercised here.
+#[tokio::test]
+async fn server_rejects_password_auth_but_still_allows_publickey() {
+    let (addr, client_auth_key) = spawn_test_server().await;
+
+    let config = Arc::new(russh::client::Config::default());
+    let mut handle = russh::client::connect(config, addr, AcceptAnyHostKey)
+        .await
+        .expect("ssh handshake failed");
+
+    let password_auth = handle
+        .authenticate_password(DEFAULT_SSH_USER, "not-a-real-password")
+        .await
+        .expect("password auth request failed");
+    assert!(
+        !password_auth.success(),
+        "`password` auth should be rejected, not accepted"
+    );
+
+    let private_key = InnerClientOptions::parse_base64_auth_key(&client_auth_key)
+        .expect("test auth key should decode");
+    let auth_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), None);
+    let publickey_auth = handle
+        .authenticate_publickey(DEFAULT_SSH_USER, auth_key)
+        .await
+        .expect("publickey auth request failed");
+    assert!(
+        publickey_auth.success(),
+        "publickey auth should still succeed on the same connection after `password` was rejected"
+    );
+}
+
+/// A [`tracing_subscriber::fmt::MakeWriter`] that appends formatted log lines into a shared
+/// buffer instead of stdout, so a test can assert on what was actually logged.
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl CapturedLogs {
+    fn contains(&self, needle: &str) -> bool {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).contains(needle)
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLogs {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// Confirms a client's IP is logged when (and only when) authentication actually fails - the
+/// specific concern being that other session-lifecycle logging (protocol errors, ordinary
+/// disconnects) must never carry it. Failure side: a rejected auth attempt logs `peer=`.
+#[tokio::test]
+async fn failed_auth_attempt_logs_include_peer_address() {
+    let (addr, _client_auth_key) = spawn_test_server().await;
+
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(logs.clone())
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .finish();
+    {
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let config = Arc::new(russh::client::Config::default());
+        let mut handle = russh::client::connect(config, addr, AcceptAnyHostKey)
+            .await
+            .expect("ssh handshake failed");
+        // Wrong key entirely - guaranteed to fail against whatever the server expects.
+        let private_key = InnerClientOptions::parse_base64_auth_key(generate_auth_key()).unwrap();
+        let auth_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), None);
+        let _ = handle
+            .authenticate_publickey(DEFAULT_SSH_USER, auth_key)
+            .await;
+    }
+
+    assert!(
+        logs.contains("peer="),
+        "expected the failed auth attempt to log the peer's address, got: {}",
+        String::from_utf8_lossy(&logs.0.lock().unwrap())
+    );
+}
+
+/// The success side of `failed_auth_attempt_logs_include_peer_address`: a connection that
+/// authenticates correctly, exchanges data, and shuts down cleanly must never have the client's
+/// IP appear in the logs anywhere - not in the auth callbacks (nothing failed) and not in the
+/// generic session-lifecycle logging either (which deliberately omits it, since it can't tell a
+/// happy disconnect from a real error).
+#[tokio::test]
+async fn successful_connection_never_logs_peer_address() {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let verifying_key = signing_key.verifying_key();
+    let identity_key = BASE64_STANDARD.encode(signing_key.to_bytes());
+    let id_pubkey = BASE64_STANDARD.encode(verifying_key.to_bytes());
+    let client_auth_key = generate_auth_key();
+
+    let server_cfg = ServerConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        connection_limit: None,
+        identity_key: Some(identity_key),
+        private_ed25519_identity_key_file: None,
+        expected_username: None,
+        client_auth_key: Some(client_auth_key.clone()),
+        banner: None,
+        client_banner: None,
+    };
+
+    let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let expected_username = server_cfg.expected_username();
+    let expected_client_pubkey = server_cfg.client_auth_pubkey().unwrap();
+    let config = create_listener(&server_cfg).unwrap();
+
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(logs.clone())
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    {
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let server_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut chan_stream = accept(config, expected_username, expected_client_pubkey, stream)
+                .await
+                .unwrap();
+
+            let mut buf = [0u8; 5];
+            chan_stream.read_exact(&mut buf).await.unwrap();
+            chan_stream.write_all(&buf).await.unwrap();
+        });
+
+        let client_opts = ClientOptions {
+            addresses: vec![addr],
+            id_pubkey,
+            username: None,
+            client_auth_key,
+            banner: None,
+            client_banner: None,
+        };
+        let mut client_stream = transport_conn(&client_opts).await.unwrap();
+        client_stream.write_all(b"hello").await.unwrap();
+
+        let mut buf = [0u8; 5];
+        client_stream.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"hello");
+
+        server_task.await.unwrap();
+
+        // Give the background session pump a moment to observe the client side closing (dropped
+        // below) and log its ordinary "session ended" line - which must also stay IP-free.
+        drop(client_stream);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
+    assert!(
+        !logs.contains("peer="),
+        "a successful connection must never log the client's IP, got: {}",
+        String::from_utf8_lossy(&logs.0.lock().unwrap())
+    );
 }
 
 /// Confirms a configured `client_banner` is sent as the client's SSH identification string
@@ -235,6 +538,7 @@ async fn client_presents_configured_banner_as_ssh_id() {
         addresses: vec![addr],
         id_pubkey,
         username: None,
+        client_auth_key: generate_auth_key(),
         banner: None,
         client_banner: Some("SSH-2.0-OpenSSH_9.6".into()),
     };
@@ -263,6 +567,7 @@ async fn server_presents_configured_banner_as_ssh_id() {
         identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
         private_ed25519_identity_key_file: None,
         expected_username: None,
+        client_auth_key: Some(generate_auth_key()),
         banner: Some("SSH-2.0-OpenSSH_9.6".into()),
         client_banner: None,
     };
@@ -270,6 +575,7 @@ async fn server_presents_configured_banner_as_ssh_id() {
     let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let expected_username = server_cfg.expected_username();
+    let expected_client_pubkey = server_cfg.client_auth_pubkey().unwrap();
     let config = create_listener(&server_cfg).unwrap();
 
     // The server writes its identification line as soon as a connection is accepted, without
@@ -277,7 +583,7 @@ async fn server_presents_configured_banner_as_ssh_id() {
     // observe it; the handshake itself will then stall and get dropped once the test ends.
     tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        let _ = accept(config, expected_username, stream).await;
+        let _ = accept(config, expected_username, expected_client_pubkey, stream).await;
     });
 
     let mut client_stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
@@ -298,7 +604,7 @@ async fn server_presents_configured_banner_as_ssh_id() {
 }
 
 /// Confirms the server config carries the session-tuning defaults this transport relies on: a
-/// single auth attempt (enforced separately in `ConnectionHandler::auth_none`, since the
+/// single auth attempt (enforced separately in `ConnectionHandler::auth_publickey`, since the
 /// installed russh version doesn't itself act on `max_auth_attempts`), and keepalive/inactivity
 /// settings generous enough that a lull in forwarded traffic isn't mistaken for a dead peer.
 #[test]
@@ -310,12 +616,17 @@ fn server_config_uses_hardened_session_defaults() {
         identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
         private_ed25519_identity_key_file: None,
         expected_username: None,
+        client_auth_key: None,
         banner: None,
         client_banner: None,
     };
 
     let config = server_cfg.build_server_config().unwrap();
     assert_eq!(config.max_auth_attempts, 1);
+    assert_eq!(
+        config.methods,
+        MethodSet::from(&[MethodKind::PublicKey][..])
+    );
     assert_eq!(config.keepalive_interval, Some(KEEPALIVE_INTERVAL));
     assert_eq!(config.inactivity_timeout, Some(INACTIVITY_TIMEOUT));
 }
@@ -346,10 +657,12 @@ async fn connection_survives_idle_lull_via_client_keepalives() {
         identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
         private_ed25519_identity_key_file: None,
         expected_username: None,
+        client_auth_key: Some(generate_auth_key()),
         banner: None,
         client_banner: None,
     };
 
+    let expected_client_pubkey = server_cfg.client_auth_pubkey().unwrap();
     let mut raw_server_config = server_cfg.build_server_config().unwrap();
     // No keepalive of its own: surviving the lull below must come entirely from the client.
     raw_server_config.keepalive_interval = None;
@@ -362,7 +675,7 @@ async fn connection_survives_idle_lull_via_client_keepalives() {
 
     let server_task = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        accept(config, expected_username, stream).await
+        accept(config, expected_username, expected_client_pubkey, stream).await
     });
 
     let mut client_config = build_client_config(None);
@@ -373,8 +686,13 @@ async fn connection_survives_idle_lull_via_client_keepalives() {
     let mut handle = russh::client::connect(Arc::new(client_config), addr, handler)
         .await
         .expect("ssh handshake failed");
+
+    let private_key =
+        InnerClientOptions::parse_base64_auth_key(server_cfg.client_auth_key.as_ref().unwrap())
+            .unwrap();
+    let auth_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), None);
     let auth = handle
-        .authenticate_none(DEFAULT_SSH_USER)
+        .authenticate_publickey(DEFAULT_SSH_USER, auth_key)
         .await
         .expect("auth request failed");
     assert!(auth.success());
@@ -417,6 +735,7 @@ async fn server_honors_configured_expected_username() {
     let verifying_key = signing_key.verifying_key();
     let identity_key = BASE64_STANDARD.encode(signing_key.to_bytes());
     let id_pubkey = BASE64_STANDARD.encode(verifying_key.to_bytes());
+    let client_auth_key = generate_auth_key();
 
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
@@ -424,6 +743,7 @@ async fn server_honors_configured_expected_username() {
         identity_key: Some(identity_key),
         private_ed25519_identity_key_file: None,
         expected_username: Some("custom_user".into()),
+        client_auth_key: Some(client_auth_key.clone()),
         banner: None,
         client_banner: None,
     };
@@ -432,6 +752,7 @@ async fn server_honors_configured_expected_username() {
     let addr = listener.local_addr().unwrap();
     let expected_username = server_cfg.expected_username();
     assert_eq!(expected_username, "custom_user");
+    let expected_client_pubkey = server_cfg.client_auth_pubkey().unwrap();
     let config = create_listener(&server_cfg).unwrap();
 
     let server_task = tokio::spawn(async move {
@@ -442,7 +763,7 @@ async fn server_honors_configured_expected_username() {
             let config = config.clone();
             let expected_username = expected_username.clone();
             tokio::spawn(async move {
-                let _ = accept(config, expected_username, stream).await;
+                let _ = accept(config, expected_username, expected_client_pubkey, stream).await;
             });
         }
     });
@@ -452,6 +773,7 @@ async fn server_honors_configured_expected_username() {
         addresses: vec![addr],
         id_pubkey: id_pubkey.clone(),
         username: Some("custom_user".into()),
+        client_auth_key: client_auth_key.clone(),
         banner: None,
         client_banner: None,
     };
@@ -460,11 +782,12 @@ async fn server_honors_configured_expected_username() {
         .expect("client presenting the configured username should be accepted");
 
     // A client that doesn't know the configured username (falling back to the shared default)
-    // is rejected, even though it correctly pinned the server's host key.
+    // is rejected, even though it correctly pinned the server's host key and auth key.
     let default_username_client = ClientOptions {
         addresses: vec![addr],
         id_pubkey,
         username: None,
+        client_auth_key,
         banner: None,
         client_banner: None,
     };
@@ -479,8 +802,8 @@ async fn server_honors_configured_expected_username() {
 
 #[tokio::test]
 async fn server_rejects_direct_tcpip_channel() {
-    let addr = spawn_test_server().await;
-    let handle = connect_test_client(addr).await;
+    let (addr, client_auth_key) = spawn_test_server().await;
+    let handle = connect_test_client(addr, &client_auth_key).await;
 
     let result = handle
         .channel_open_direct_tcpip("127.0.0.1", 80, "127.0.0.1", 0)
@@ -494,8 +817,8 @@ async fn server_rejects_direct_tcpip_channel() {
 
 #[tokio::test]
 async fn server_rejects_x11_channel_open() {
-    let addr = spawn_test_server().await;
-    let handle = connect_test_client(addr).await;
+    let (addr, client_auth_key) = spawn_test_server().await;
+    let handle = connect_test_client(addr, &client_auth_key).await;
 
     let result = handle.channel_open_x11("127.0.0.1", 6010).await;
 
@@ -507,8 +830,8 @@ async fn server_rejects_x11_channel_open() {
 
 #[tokio::test]
 async fn server_rejects_remote_tcpip_forward() {
-    let addr = spawn_test_server().await;
-    let handle = connect_test_client(addr).await;
+    let (addr, client_auth_key) = spawn_test_server().await;
+    let handle = connect_test_client(addr, &client_auth_key).await;
 
     let result = handle.tcpip_forward("127.0.0.1", 0).await;
 
@@ -520,8 +843,8 @@ async fn server_rejects_remote_tcpip_forward() {
 
 #[tokio::test]
 async fn server_rejects_pty_request() {
-    let addr = spawn_test_server().await;
-    let handle = connect_test_client(addr).await;
+    let (addr, client_auth_key) = spawn_test_server().await;
+    let handle = connect_test_client(addr, &client_auth_key).await;
     let mut channel = handle
         .channel_open_session()
         .await
@@ -540,8 +863,8 @@ async fn server_rejects_pty_request() {
 
 #[tokio::test]
 async fn server_rejects_exec_request() {
-    let addr = spawn_test_server().await;
-    let handle = connect_test_client(addr).await;
+    let (addr, client_auth_key) = spawn_test_server().await;
+    let handle = connect_test_client(addr, &client_auth_key).await;
     let mut channel = handle
         .channel_open_session()
         .await
@@ -560,8 +883,8 @@ async fn server_rejects_exec_request() {
 
 #[tokio::test]
 async fn server_rejects_shell_request() {
-    let addr = spawn_test_server().await;
-    let handle = connect_test_client(addr).await;
+    let (addr, client_auth_key) = spawn_test_server().await;
+    let handle = connect_test_client(addr, &client_auth_key).await;
     let mut channel = handle
         .channel_open_session()
         .await
@@ -580,8 +903,8 @@ async fn server_rejects_shell_request() {
 
 #[tokio::test]
 async fn server_rejects_subsystem_request() {
-    let addr = spawn_test_server().await;
-    let handle = connect_test_client(addr).await;
+    let (addr, client_auth_key) = spawn_test_server().await;
+    let handle = connect_test_client(addr, &client_auth_key).await;
     let mut channel = handle
         .channel_open_session()
         .await
@@ -600,8 +923,8 @@ async fn server_rejects_subsystem_request() {
 
 #[tokio::test]
 async fn server_rejects_x11_request() {
-    let addr = spawn_test_server().await;
-    let handle = connect_test_client(addr).await;
+    let (addr, client_auth_key) = spawn_test_server().await;
+    let handle = connect_test_client(addr, &client_auth_key).await;
     let mut channel = handle
         .channel_open_session()
         .await

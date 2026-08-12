@@ -213,6 +213,9 @@ async fn launch_ssh_listener(
     let config =
         ssh::create_listener(&options).context("failed to initialize cryptographic config")?;
     let expected_username = options.expected_username();
+    let expected_client_pubkey = options
+        .client_auth_pubkey()
+        .context("failed to derive expected client public key")?;
 
     let listener = tokio::net::TcpListener::bind(&options.listen).await?;
     tracing::info!("ssh transport listening on {}", &options.listen);
@@ -233,11 +236,14 @@ async fn launch_ssh_listener(
                 let fwd = fwd_cfg.clone();
 
                 tokio::spawn(async move {
-                    match ssh::accept(config, expected_username, stream).await {
+                    match ssh::accept(config, expected_username, expected_client_pubkey, stream).await {
                         Ok(chan_stream) => {
                             handle_ssh_connection(chan_stream, address, fwd, client_token).await;
                         }
                         Err(err) => {
+                            // `accept` can fail for reasons other than authentication (protocol
+                            // errors, pre-auth timeouts) - the peer's IP is logged specifically
+                            // for auth failures, in `ConnectionHandler`'s auth callbacks, not here.
                             warn!("ssh handshake failed: {err}");
                         }
                     }

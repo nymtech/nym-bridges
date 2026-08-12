@@ -310,6 +310,12 @@ pub mod ssh {
         /// User identity sent as part of a basic auth on the clients behalf.
         pub username: Option<String>,
 
+        /// Base64 encoded ed25519 private key shared out-of-band with the server, used to
+        /// authenticate this client via SSH `publickey` - the `none` auth method is explicitly
+        /// disallowed. The server must be configured with the same value (as `client_auth_key`)
+        /// so it can derive the matching public key and recognize it.
+        pub client_auth_key: String,
+
         /// SSH identification string the server is expected to present at the start of the
         /// protocol, as configured on the server. This is informational only - it is not
         /// validated against whatever identification string the server actually presents when a
@@ -324,7 +330,9 @@ pub mod ssh {
 
     impl Sufficiency for SshPlainClientOptions {
         fn is_sufficient(&self) -> bool {
-            !self.addresses.is_empty() && !self.id_pubkey.trim().is_empty()
+            !self.addresses.is_empty()
+                && !self.id_pubkey.trim().is_empty()
+                && !self.client_auth_key.trim().is_empty()
         }
     }
 
