@@ -44,11 +44,18 @@ pub struct ServerConfig {
 
     pub expected_username: Option<String>,
 
-    /// SSH banner presented to clients during authentication. Purely informational (e.g. a
-    /// notice or greeting) - not required for and not checked as part of establishing a
-    /// connection. This same value is copied into the generated client configuration so
-    /// consumers of that configuration know what banner to expect ahead of time.
+    /// SSH identification string this server should present in place of the underlying SSH
+    /// library's default, sent as a plaintext line at the very start of the protocol (before any
+    /// key exchange). This same value is copied into the generated client configuration so
+    /// consumers of that configuration know what to expect ahead of time. Purely for
+    /// on-the-wire fingerprint management - clients do not check or validate it.
     pub banner: Option<String>,
+
+    /// SSH identification string that connecting clients should present in place of the
+    /// underlying SSH library's default, copied into the generated client configuration. Purely
+    /// for on-the-wire fingerprint management - the server does not check or validate whatever
+    /// identification string a client actually presents.
+    pub client_banner: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -60,6 +67,7 @@ impl Default for ServerConfig {
             private_ed25519_identity_key_file: Default::default(),
             expected_username: Default::default(),
             banner: Default::default(),
+            client_banner: Default::default(),
         }
     }
 }
@@ -81,7 +89,7 @@ impl ServerConfig {
         let keypair = ssh_key::private::Ed25519Keypair::from_seed(&source.identity_seed());
         let host_key: russh::keys::PrivateKey = keypair.into();
 
-        Ok(russh::server::Config {
+        let mut config = russh::server::Config {
             inactivity_timeout: Some(Duration::from_secs(60)),
             auth_rejection_time: Duration::from_secs(3),
             auth_rejection_time_initial: Some(Duration::from_secs(3)),
@@ -91,7 +99,12 @@ impl ServerConfig {
                 ..Preferred::default()
             },
             ..Default::default()
-        })
+        };
+        if let Some(ref banner) = self.banner {
+            config.server_id = russh::SshId::Standard(std::borrow::Cow::Owned(banner.clone()));
+        }
+
+        Ok(config)
     }
 
     pub fn get_id_pubkey(&self) -> Result<String> {
@@ -129,7 +142,6 @@ pub fn create_listener(options: &ServerConfig) -> Result<Arc<russh::server::Conf
 struct ConnectionHandler {
     channel_tx: Option<oneshot::Sender<Channel<russh::server::Msg>>>,
     expected_username: String,
-    banner: Option<String>,
 }
 
 impl ConnectionHandler {
@@ -145,10 +157,6 @@ impl ConnectionHandler {
 
 impl russh::server::Handler for ConnectionHandler {
     type Error = russh::Error;
-
-    async fn authentication_banner(&mut self) -> std::result::Result<Option<String>, Self::Error> {
-        Ok(self.banner.clone())
-    }
 
     async fn auth_none(
         &mut self,
@@ -275,14 +283,12 @@ impl russh::server::Handler for ConnectionHandler {
 pub async fn accept(
     config: Arc<russh::server::Config>,
     expected_username: String,
-    banner: Option<String>,
     stream: TcpStream,
 ) -> Result<ServerChannelStream> {
     let (channel_tx, channel_rx) = oneshot::channel();
     let handler = ConnectionHandler {
         channel_tx: Some(channel_tx),
         expected_username,
-        banner,
     };
 
     let running = russh::server::run_stream(config, stream, handler).await?;
@@ -308,6 +314,7 @@ struct InnerClientOptions {
     pub addresses: Vec<SocketAddr>,
     pub id_pubkey: VerifyingKey,
     pub username: Option<String>,
+    pub client_banner: Option<String>,
 }
 
 impl TryFrom<&ClientOptions> for InnerClientOptions {
@@ -319,6 +326,7 @@ impl TryFrom<&ClientOptions> for InnerClientOptions {
             addresses: value.addresses.clone(),
             id_pubkey,
             username: value.username.clone(),
+            client_banner: value.client_banner.clone(),
         })
     }
 }
@@ -338,10 +346,26 @@ impl InnerClientOptions {
     }
 }
 
-/// Client-side handler responsible only for pinning the server's ed25519 host key against the
+/// Client-side handler responsible for pinning the server's ed25519 host key against the
 /// configured identity public key.
+///
+/// Everything a malicious or compromised server could use to open a connection back into the
+/// client - forwarded TCP/IP or UDS channels, agent forwarding, X11, or a plain session/direct
+/// channel - is explicitly refused rather than left to whatever the library's default behavior
+/// happens to be, mirroring [`ConnectionHandler`]'s refusal of anything outside the single
+/// client-initiated data channel on the server side.
 struct ClientHandler {
     id_pubkey: VerifyingKey,
+}
+
+impl ClientHandler {
+    /// Send an explicit channel-open rejection back to the server instead of leaving the
+    /// request without any response.
+    async fn deny_channel_open(reply: russh::client::ChannelOpenHandle) {
+        reply
+            .reject(ChannelOpenFailure::AdministrativelyProhibited)
+            .await;
+    }
 }
 
 impl russh::client::Handler for ClientHandler {
@@ -356,6 +380,96 @@ impl russh::client::Handler for ClientHandler {
         };
         Ok(ed25519_key.0 == self.id_pubkey.to_bytes())
     }
+
+    async fn should_accept_unknown_server_channel(
+        &mut self,
+        _id: ChannelId,
+        _channel_type: &str,
+    ) -> bool {
+        false
+    }
+
+    async fn server_channel_open_session(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_x11(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_direct_tcpip(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _host_to_connect: &str,
+        _port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_direct_streamlocal(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _socket_path: &str,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _socket_path: &str,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
 }
 
 pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStream> {
@@ -369,6 +483,9 @@ pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStre
 
     let mut client_config = russh::client::Config::default();
     client_config.preferred.key = std::borrow::Cow::Borrowed(&[ssh_key::Algorithm::Ed25519]);
+    if let Some(client_banner) = inner_options.client_banner {
+        client_config.client_id = russh::SshId::Standard(std::borrow::Cow::Owned(client_banner));
+    }
     let client_config = Arc::new(client_config);
 
     let handler = ClientHandler {

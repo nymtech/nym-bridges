@@ -37,3 +37,6 @@ listen = "[::]:4422"
 # private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity'
 
 identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
+
+banner = "SSH-2.0-OpenSSH_9.6.1"
+client_banner = "SSH-2.0-OpenSSH_9.6"

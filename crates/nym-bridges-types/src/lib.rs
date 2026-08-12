@@ -310,10 +310,16 @@ pub mod ssh {
         /// User identity sent as part of a basic auth on the clients behalf.
         pub username: Option<String>,
 
-        /// SSH banner the server is expected to present during authentication, as configured on
-        /// the server. This is informational only - it is not validated against whatever banner
-        /// the server actually presents when a connection is established.
+        /// SSH identification string the server is expected to present at the start of the
+        /// protocol, as configured on the server. This is informational only - it is not
+        /// validated against whatever identification string the server actually presents when a
+        /// connection is established.
         pub banner: Option<String>,
+
+        /// SSH identification string the client should present during the handshake, in place of
+        /// the underlying SSH library's default. Purely for on-the-wire fingerprint management -
+        /// the server does not check or validate it.
+        pub client_banner: Option<String>,
     }
 
     impl Sufficiency for SshPlainClientOptions {

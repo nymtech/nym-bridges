@@ -213,7 +213,6 @@ async fn launch_ssh_listener(
     let config =
         ssh::create_listener(&options).context("failed to initialize cryptographic config")?;
     let expected_username = options.expected_username();
-    let banner = options.banner.clone();
 
     let listener = tokio::net::TcpListener::bind(&options.listen).await?;
     tracing::info!("ssh transport listening on {}", &options.listen);
@@ -230,12 +229,11 @@ async fn launch_ssh_listener(
                 let (stream, address) = res?;
                 let config = config.clone();
                 let expected_username = expected_username.clone();
-                let banner = banner.clone();
                 let client_token = token.clone();
                 let fwd = fwd_cfg.clone();
 
                 tokio::spawn(async move {
-                    match ssh::accept(config, expected_username, banner, stream).await {
+                    match ssh::accept(config, expected_username, stream).await {
                         Ok(chan_stream) => {
                             handle_ssh_connection(chan_stream, address, fwd, client_token).await;
                         }
