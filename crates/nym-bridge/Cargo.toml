@@ -60,11 +60,11 @@ name = "nym-bridge"
 maintainer = "Nym Technologies SA <contact@nymtech.net>"
 priority = "optional"
 section = "net"
-license-file = ["../../LICENSE", "0"]
+license-file = ["../../LICENSE-APACHE", "0"]
 extended-description-file = "crates/nym-bridge/pkg/doc/description.txt"
 depends = "$auto, adduser"
 maintainer-scripts = "pkg/debian/"
-copyright = "Copyright (c) 2025, Nym Technologies SA. All rights reserved."
+copyright = "Copyright (c) 2025, Nym Technologies SA. Licensed under MIT OR Apache-2.0."
 assets = [
     [
         "target/release/nym-bridge",
