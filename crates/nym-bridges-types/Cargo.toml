@@ -11,6 +11,9 @@ documentation.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+crate-type = ["cdylib", "lib"]
+
 [features]
 uniffi-bindings = ["dep:uniffi"]
 typescript-bindings = ["dep:ts-rs", "serde"]
