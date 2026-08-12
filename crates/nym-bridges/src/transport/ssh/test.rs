@@ -297,6 +297,117 @@ async fn server_presents_configured_banner_as_ssh_id() {
     );
 }
 
+/// Confirms the server config carries the session-tuning defaults this transport relies on: a
+/// single auth attempt (enforced separately in `ConnectionHandler::auth_none`, since the
+/// installed russh version doesn't itself act on `max_auth_attempts`), and keepalive/inactivity
+/// settings generous enough that a lull in forwarded traffic isn't mistaken for a dead peer.
+#[test]
+fn server_config_uses_hardened_session_defaults() {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let server_cfg = ServerConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        connection_limit: None,
+        identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
+        private_ed25519_identity_key_file: None,
+        expected_username: None,
+        banner: None,
+        client_banner: None,
+    };
+
+    let config = server_cfg.build_server_config().unwrap();
+    assert_eq!(config.max_auth_attempts, 1);
+    assert_eq!(config.keepalive_interval, Some(KEEPALIVE_INTERVAL));
+    assert_eq!(config.inactivity_timeout, Some(INACTIVITY_TIMEOUT));
+}
+
+/// The client-side counterpart to `server_config_uses_hardened_session_defaults`: the client
+/// also needs a keepalive interval configured, since it's the client's periodic traffic that
+/// keeps the *server's* inactivity timer from firing during a lull (see
+/// `connection_survives_idle_lull_via_client_keepalives`).
+#[test]
+fn client_config_uses_hardened_session_defaults() {
+    let config = build_client_config(None);
+    assert_eq!(config.keepalive_interval, Some(KEEPALIVE_INTERVAL));
+    assert_eq!(config.inactivity_timeout, Some(INACTIVITY_TIMEOUT));
+}
+
+/// Confirms an idle lull in application traffic - the tunneled connection just being quiet for a
+/// while, not actually dead - doesn't get mistaken for a dead peer and torn down. Uses the
+/// production `accept`/`build_client_config` session config with `inactivity_timeout` and
+/// `keepalive_interval` overridden to millisecond-scale values so the test doesn't have to wait
+/// on the production-scale (30s/5min) durations; the mechanism being exercised - the client's
+/// keepalive traffic resetting the server's inactivity timer - is the same either way.
+#[tokio::test]
+async fn connection_survives_idle_lull_via_client_keepalives() {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let server_cfg = ServerConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        connection_limit: None,
+        identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
+        private_ed25519_identity_key_file: None,
+        expected_username: None,
+        banner: None,
+        client_banner: None,
+    };
+
+    let mut raw_server_config = server_cfg.build_server_config().unwrap();
+    // No keepalive of its own: surviving the lull below must come entirely from the client.
+    raw_server_config.keepalive_interval = None;
+    raw_server_config.inactivity_timeout = Some(Duration::from_millis(300));
+    let config = Arc::new(raw_server_config);
+
+    let listener = TcpListener::bind(server_cfg.listen).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let expected_username = server_cfg.expected_username();
+
+    let server_task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        accept(config, expected_username, stream).await
+    });
+
+    let mut client_config = build_client_config(None);
+    client_config.keepalive_interval = Some(Duration::from_millis(50));
+    let handler = ClientHandler {
+        id_pubkey: signing_key.verifying_key(),
+    };
+    let mut handle = russh::client::connect(Arc::new(client_config), addr, handler)
+        .await
+        .expect("ssh handshake failed");
+    let auth = handle
+        .authenticate_none(DEFAULT_SSH_USER)
+        .await
+        .expect("auth request failed");
+    assert!(auth.success());
+
+    let mut client_stream = handle
+        .channel_open_session()
+        .await
+        .expect("plain session channel should be accepted")
+        .into_stream();
+
+    let mut server_stream = server_task
+        .await
+        .unwrap()
+        .expect("server should accept the channel before the lull even starts");
+
+    // Sit idle, well past several multiples of the server's (shortened) inactivity_timeout. If
+    // the client's keepalives weren't resetting it, the server would have long since torn the
+    // connection down.
+    tokio::time::sleep(Duration::from_millis(900)).await;
+
+    client_stream
+        .write_all(b"still alive")
+        .await
+        .expect("channel should still be writable after the idle lull");
+
+    let mut buf = [0u8; 32];
+    let n = tokio::time::timeout(Duration::from_secs(2), server_stream.read(&mut buf))
+        .await
+        .expect("read timed out - server likely dropped the connection during the lull")
+        .expect("read failed");
+    assert_eq!(&buf[..n], b"still alive");
+}
+
 /// Confirms the username check is against the server's *configured* `expected_username`, not
 /// just the shared default: a client presenting the configured username connects successfully,
 /// while a client that omits it (falling back to the default) is rejected.

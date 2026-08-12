@@ -21,6 +21,26 @@ const DEFAULT_SOCK_ADDR: &str = "[::]:4422";
 /// and the username is only checked as a shared-secret-like gate between client and server.
 const DEFAULT_SSH_USER: &str = "ubuntu";
 
+/// How often each side pings the other when nothing else has been sent, so that a lull in the
+/// forwarded traffic (the tunneled application going quiet for a while) doesn't get mistaken for
+/// a dead connection and torn down by [`INACTIVITY_TIMEOUT`]. Configured on both the server and
+/// client so either side going quiet is covered.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How long a connection may go without receiving *anything* - including keepalive traffic -
+/// before it's torn down. Kept generous relative to [`KEEPALIVE_INTERVAL`]: as long as keepalives
+/// are getting through, a genuinely dead peer is caught by `keepalive_max` (library default: 3)
+/// unanswered pings well before this backstop would ever fire; this only matters if keepalives
+/// themselves somehow stop flowing.
+const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// This transport has exactly one real auth method (`none`, gated on the shared-secret-like
+/// username) - there's no legitimate reason a client would need more than one attempt at it. The
+/// installed russh version doesn't itself enforce `max_auth_attempts` (nothing in the crate
+/// actually reads the field back), so `ConnectionHandler::auth_none` additionally disconnects
+/// outright on a failed attempt rather than relying on this alone.
+const MAX_AUTH_ATTEMPTS: usize = 1;
+
 /// Stream produced by the server side of the transport once a client has opened a channel.
 pub type ServerChannelStream = ChannelStream<russh::server::Msg>;
 /// Stream produced by the client side of the transport once its channel is open.
@@ -90,7 +110,9 @@ impl ServerConfig {
         let host_key: russh::keys::PrivateKey = keypair.into();
 
         let mut config = russh::server::Config {
-            inactivity_timeout: Some(Duration::from_secs(60)),
+            inactivity_timeout: Some(INACTIVITY_TIMEOUT),
+            keepalive_interval: Some(KEEPALIVE_INTERVAL),
+            max_auth_attempts: MAX_AUTH_ATTEMPTS,
             auth_rejection_time: Duration::from_secs(3),
             auth_rejection_time_initial: Some(Duration::from_secs(3)),
             keys: vec![host_key],
@@ -165,7 +187,11 @@ impl russh::server::Handler for ConnectionHandler {
         if user == self.expected_username {
             Ok(russh::server::Auth::Accept)
         } else {
-            Ok(russh::server::Auth::reject())
+            // MAX_AUTH_ATTEMPTS is 1, but the installed russh version never actually reads
+            // `Config::max_auth_attempts` back to enforce it - a soft `Auth::reject()` here would
+            // let a client keep guessing usernames indefinitely on the same connection. Ending
+            // the session outright on the very first failure is what actually makes it one shot.
+            Err(russh::Error::Disconnect)
         }
     }
 
@@ -472,6 +498,25 @@ impl russh::client::Handler for ClientHandler {
     }
 }
 
+/// Build the client-side session configuration (kex/algorithm preferences plus the session
+/// tuning shared with [`ServerConfig::build_server_config`]), optionally overriding the
+/// identification string presented during the handshake.
+fn build_client_config(client_banner: Option<String>) -> russh::client::Config {
+    let mut config = russh::client::Config {
+        keepalive_interval: Some(KEEPALIVE_INTERVAL),
+        inactivity_timeout: Some(INACTIVITY_TIMEOUT),
+        preferred: Preferred {
+            key: std::borrow::Cow::Borrowed(&[ssh_key::Algorithm::Ed25519]),
+            ..Preferred::default()
+        },
+        ..Default::default()
+    };
+    if let Some(client_banner) = client_banner {
+        config.client_id = russh::SshId::Standard(std::borrow::Cow::Owned(client_banner));
+    }
+    config
+}
+
 pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStream> {
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
@@ -481,12 +526,7 @@ pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStre
         .first()
         .ok_or_else(|| TransportError::config_err("no ssh bridge address configured"))?;
 
-    let mut client_config = russh::client::Config::default();
-    client_config.preferred.key = std::borrow::Cow::Borrowed(&[ssh_key::Algorithm::Ed25519]);
-    if let Some(client_banner) = inner_options.client_banner {
-        client_config.client_id = russh::SshId::Standard(std::borrow::Cow::Owned(client_banner));
-    }
-    let client_config = Arc::new(client_config);
+    let client_config = Arc::new(build_client_config(inner_options.client_banner));
 
     let handler = ClientHandler {
         id_pubkey: inner_options.id_pubkey,
