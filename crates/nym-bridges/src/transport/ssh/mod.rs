@@ -2,6 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
+use futures::future;
 use russh::keys::PrivateKeyWithHashAlg;
 use russh::keys::ssh_key;
 use russh::{
@@ -656,14 +657,21 @@ fn build_client_config(client_banner: Option<String>) -> russh::client::Config {
     config
 }
 
+/// Attempt a TCP connection against every provided address concurrently, and take whichever
+/// succeeds first -- similar in spirit to "happy eyeballs" (RFC 8305), except we don't stagger
+/// the attempts, since we're only ever racing a handful of candidates and a plain TCP connect is
+/// cheap to fire off up front (mirrors the equivalent helper in `transport::tls`).
+///
+/// The losing attempts are dropped (and their sockets closed) once a winner completes.
 pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStream> {
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
 
-    let addr = *inner_options
-        .addresses
-        .first()
-        .ok_or_else(|| TransportError::config_err("no ssh bridge address configured"))?;
+    if inner_options.addresses.is_empty() {
+        return Err(TransportError::config_err(
+            "no ssh bridge address configured",
+        ));
+    }
 
     let client_config = Arc::new(build_client_config(inner_options.client_banner));
 
@@ -671,7 +679,19 @@ pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStre
         id_pubkey: inner_options.id_pubkey,
     };
 
-    let mut handle = russh::client::connect(client_config, addr, handler).await?;
+    let attempts = inner_options
+        .addresses
+        .iter()
+        .map(|&addr| Box::pin(TcpStream::connect(addr)));
+
+    let (stream, _losing_attempts) = future::select_ok(attempts).await.inspect_err(|e| {
+        warn!(
+            "failed to connect to any of {} ssh endpoint(s): {e}",
+            inner_options.addresses.len()
+        );
+    })?;
+
+    let mut handle = russh::client::connect_stream(client_config, stream, handler).await?;
 
     let username = inner_options.username.unwrap_or(DEFAULT_SSH_USER.into());
     let auth_key = PrivateKeyWithHashAlg::new(Arc::new(inner_options.client_auth_key), None);
