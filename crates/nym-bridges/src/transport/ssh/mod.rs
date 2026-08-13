@@ -1,0 +1,712 @@
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+
+use base64::prelude::*;
+use ed25519_dalek::VerifyingKey;
+use futures::future;
+use russh::keys::PrivateKeyWithHashAlg;
+use russh::keys::ssh_key;
+use russh::{
+    Channel, ChannelId, ChannelOpenFailure, ChannelStream, MethodKind, MethodSet, Preferred, Pty,
+};
+use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
+use tokio::sync::oneshot;
+use tracing::*;
+
+use crate::error::{Result, TransportError};
+use crate::transport::tls::certs::ServerConfigSource;
+
+const DEFAULT_SOCK_ADDR: &str = "[::]:4422";
+
+/// Default user name presented/expected during SSH auth when neither side has configured one.
+/// The transport doesn't have a notion of separate users; authentication is really gated on the
+/// pre-shared `client_auth_key` keypair, and the username is only checked as a secondary,
+/// shared-secret-like gate between client and server.
+const DEFAULT_SSH_USER: &str = "ubuntu";
+
+/// How often each side pings the other when nothing else has been sent, so that a lull in the
+/// forwarded traffic (the tunneled application going quiet for a while) doesn't get mistaken for
+/// a dead connection and torn down by [`INACTIVITY_TIMEOUT`]. Configured on both the server and
+/// client so either side going quiet is covered.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How long a connection may go without receiving *anything* - including keepalive traffic -
+/// before it's torn down. Kept generous relative to [`KEEPALIVE_INTERVAL`]: as long as keepalives
+/// are getting through, a genuinely dead peer is caught by `keepalive_max` (library default: 3)
+/// unanswered pings well before this backstop would ever fire; this only matters if keepalives
+/// themselves somehow stop flowing.
+const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// This transport has exactly one real auth method (`publickey`, gated on the pre-shared
+/// `client_auth_key` identity) - there's no legitimate reason a client would need more than one
+/// attempt at it. The installed russh version doesn't itself enforce `max_auth_attempts` (nothing
+/// in the crate actually reads the field back), so `ConnectionHandler::auth_publickey`
+/// additionally disconnects outright on a failed attempt rather than relying on this alone.
+const MAX_AUTH_ATTEMPTS: usize = 1;
+
+/// Stream produced by the server side of the transport once a client has opened a channel.
+pub type ServerChannelStream = ChannelStream<russh::server::Msg>;
+/// Stream produced by the client side of the transport once its channel is open.
+pub type ClientChannelStream = ChannelStream<russh::client::Msg>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerConfig {
+    /// Address to listen on
+    pub listen: SocketAddr,
+
+    /// Maximum number of concurrent connections to allow
+    pub connection_limit: Option<usize>,
+
+    /// Base64 encoded Identity Key, for use as the ed25519 SSH host key. Used only if
+    /// `private_ed25519_identity_key_file` is not provided.
+    pub identity_key: Option<String>,
+
+    /// Path to file containing PKCS8 PEM ed25519 identity private key, for use as the ed25519 SSH
+    /// host key.
+    pub private_ed25519_identity_key_file: Option<PathBuf>,
+
+    pub expected_username: Option<String>,
+
+    /// Base64 encoded ed25519 private key shared out-of-band with the one client this server
+    /// should accept connections from. The server derives the associated public key from it and
+    /// only accepts SSH `publickey` authentication proving ownership of that exact keypair - the
+    /// `none` auth method is explicitly disallowed. The same value must be configured on the
+    /// client (as `client_auth_key`) so it can sign with the matching private key.
+    pub client_auth_key: Option<String>,
+
+    /// SSH identification string this server should present in place of the underlying SSH
+    /// library's default, sent as a plaintext line at the very start of the protocol (before any
+    /// key exchange).
+    pub banner: Option<String>,
+
+    /// SSH identification string that connecting clients should present in place of the
+    /// underlying SSH library's default, copied into the generated client configuration. Purely
+    /// for on-the-wire fingerprint management - the server does not check or validate whatever
+    /// identification string a client actually presents.
+    pub client_banner: Option<String>,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            listen: DEFAULT_SOCK_ADDR.parse().unwrap(),
+            connection_limit: Default::default(),
+            identity_key: Default::default(),
+            private_ed25519_identity_key_file: Default::default(),
+            expected_username: Default::default(),
+            client_auth_key: Default::default(),
+            banner: Default::default(),
+            client_banner: Default::default(),
+        }
+    }
+}
+
+impl ServerConfig {
+    fn get_crypto_source(&self) -> Result<ServerConfigSource> {
+        // parse either key or file
+        if let Some(ref base64_key) = self.identity_key {
+            ServerConfigSource::from_identity_base64(base64_key)
+        } else if let Some(ref key_path) = self.private_ed25519_identity_key_file {
+            ServerConfigSource::from_pkcs8_pem_file(key_path)
+        } else {
+            Err(TransportError::config_err("no crypto source provided"))
+        }
+    }
+
+    fn build_server_config(&self) -> Result<russh::server::Config> {
+        let source = self.get_crypto_source()?;
+        let keypair = ssh_key::private::Ed25519Keypair::from_seed(&source.identity_seed());
+        let host_key: russh::keys::PrivateKey = keypair.into();
+
+        let mut config = russh::server::Config {
+            // Only `publickey` is a real option here - `none` is explicitly disallowed.
+            methods: MethodSet::from(&[MethodKind::PublicKey][..]),
+            inactivity_timeout: Some(INACTIVITY_TIMEOUT),
+            keepalive_interval: Some(KEEPALIVE_INTERVAL),
+            max_auth_attempts: MAX_AUTH_ATTEMPTS,
+            auth_rejection_time: Duration::from_secs(3),
+            auth_rejection_time_initial: Some(Duration::from_secs(3)),
+            keys: vec![host_key],
+            preferred: Preferred {
+                key: std::borrow::Cow::Borrowed(&[ssh_key::Algorithm::Ed25519]),
+                ..Preferred::default()
+            },
+            ..Default::default()
+        };
+        if let Some(ref banner) = self.banner {
+            config.server_id = russh::SshId::Standard(std::borrow::Cow::Owned(banner.clone()));
+        }
+
+        Ok(config)
+    }
+
+    pub fn get_id_pubkey(&self) -> Result<String> {
+        let crypto_source = self.get_crypto_source()?;
+        let public_id = crypto_source.public_identity();
+        Ok(BASE64_STANDARD.encode(&public_id[..]))
+    }
+
+    /// Public key half of the required `client_auth_key`, derived from it - this is the only key
+    /// a client's `publickey` auth attempt will be accepted for.
+    pub fn client_auth_pubkey(&self) -> Result<VerifyingKey> {
+        let key = self.client_auth_key.as_deref().ok_or_else(|| {
+            TransportError::config_err("no client_auth_key configured for ssh transport")
+        })?;
+        let source = ServerConfigSource::from_identity_base64(key)?;
+        VerifyingKey::from_bytes(&source.public_identity())
+            .map_err(|e| TransportError::config_err(format!("bad client_auth_key: {e}")))
+    }
+
+    /// Username a connecting client must present, falling back to [`DEFAULT_SSH_USER`] if none
+    /// was configured.
+    pub fn expected_username(&self) -> String {
+        self.expected_username
+            .clone()
+            .unwrap_or_else(|| DEFAULT_SSH_USER.to_string())
+    }
+}
+
+/// Build the shared SSH server configuration (host key + kex/algorithm preferences) used to
+/// handshake every accepted connection.
+pub fn create_listener(options: &ServerConfig) -> Result<Arc<russh::server::Config>> {
+    Ok(Arc::new(options.build_server_config()?))
+}
+
+/// Handler for a single accepted TCP connection. Authenticates the client via SSH `publickey`
+/// against the pre-shared `client_auth_key` identity (the `none` method is explicitly
+/// disallowed - see [`ConnectionHandler::auth_none`]), also checking that the client's presented
+/// username matches `expected_username` as a secondary, shared-secret-like gate (the transport
+/// has no notion of distinct users beyond that). Hands the first opened channel back to the
+/// caller via `channel_tx` so that further handling (framing, forwarding, etc.) is left entirely
+/// up to the application driving the accept loop.
+///
+/// Only a plain "session" channel used to carry opaque forwarded bytes is supported. Everything
+/// else an SSH client can normally ask for - running commands, allocating a pty, subsystems, X11
+/// or TCP/IP forwarding - is explicitly refused rather than left to whatever the library's
+/// default behavior happens to be, since this is meant to be a narrow, single-purpose transport
+/// rather than a general-purpose SSH server.
+struct ConnectionHandler {
+    channel_tx: Option<oneshot::Sender<Channel<russh::server::Msg>>>,
+    expected_username: String,
+    expected_client_pubkey: VerifyingKey,
+    /// Remote address of the TCP connection, logged alongside rejected auth attempts so failed
+    /// potential probing and internet crawling is captured in logs. Never used to log valid
+    /// authenticated client IPs.
+    peer_addr: SocketAddr,
+}
+
+impl ConnectionHandler {
+    /// Send an explicit channel-request failure back to the client instead of leaving the
+    /// request without any response.
+    fn deny_channel_request(
+        session: &mut russh::server::Session,
+        channel: ChannelId,
+    ) -> std::result::Result<(), russh::Error> {
+        session.channel_failure(channel)
+    }
+
+    /// Whether a presented public key is the one ed25519 key this connection is allowed to
+    /// authenticate as.
+    fn key_matches(&self, offered: &ssh_key::PublicKey) -> bool {
+        let Some(ed25519_key) = offered.key_data().ed25519() else {
+            return false;
+        };
+        ed25519_key.0 == self.expected_client_pubkey.to_bytes()
+    }
+}
+
+impl russh::server::Handler for ConnectionHandler {
+    type Error = russh::Error;
+
+    /// The `none` method is explicitly disallowed - this transport authenticates solely via
+    /// `publickey` against the pre-shared `client_auth_key` identity (see
+    /// [`Self::auth_publickey`]). A soft reject (rather than disconnecting outright) matches
+    /// standard SSH client behavior, which will often probe with `none` first before offering a
+    /// real method, and lets `methods` (restricted to `publickey` only) steer it there.
+    async fn auth_none(
+        &mut self,
+        user: &str,
+    ) -> std::result::Result<russh::server::Auth, Self::Error> {
+        warn!(
+            peer = %self.peer_addr,
+            user,
+            "rejected ssh auth attempt: `none` method is disallowed"
+        );
+        Ok(russh::server::Auth::reject())
+    }
+
+    /// The real authentication gate: accepts only a signature proving ownership of the
+    /// pre-shared `client_auth_key` identity, from a client presenting the expected username.
+    /// Russh only calls this after it has already verified the signature and confirmed key
+    /// ownership, so the check here is purely "is this the one key/user we expect".
+    ///
+    /// MAX_AUTH_ATTEMPTS is 1, but the installed russh version never actually reads
+    /// `Config::max_auth_attempts` back to enforce it - a soft `Auth::reject()` here would let a
+    /// client keep guessing on the same connection. Ending the session outright on the very
+    /// first failure is what actually makes it one shot.
+    async fn auth_publickey(
+        &mut self,
+        user: &str,
+        public_key: &ssh_key::PublicKey,
+    ) -> std::result::Result<russh::server::Auth, Self::Error> {
+        if user != self.expected_username {
+            warn!(
+                peer = %self.peer_addr,
+                user,
+                "rejected ssh publickey auth attempt: unexpected username"
+            );
+            return Err(russh::Error::Disconnect);
+        }
+        if !self.key_matches(public_key) {
+            warn!(
+                peer = %self.peer_addr,
+                user,
+                "rejected ssh publickey auth attempt: key does not match the configured identity"
+            );
+            return Err(russh::Error::Disconnect);
+        }
+        Ok(russh::server::Auth::Accept)
+    }
+
+    /// `password` is not a supported method - `methods` (restricted to `publickey` only) tells
+    /// well-behaved clients this up front, but nothing stops a client from trying anyway, so a
+    /// soft reject (matching [`Self::auth_none`]'s reasoning) is still logged.
+    async fn auth_password(
+        &mut self,
+        user: &str,
+        _password: &str,
+    ) -> std::result::Result<russh::server::Auth, Self::Error> {
+        warn!(
+            peer = %self.peer_addr,
+            user,
+            "rejected ssh auth attempt: `password` method is not supported"
+        );
+        Ok(russh::server::Auth::reject())
+    }
+
+    /// `keyboard-interactive` is not a supported method - see [`Self::auth_password`].
+    async fn auth_keyboard_interactive(
+        &mut self,
+        user: &str,
+        _submethods: &str,
+        _response: Option<russh::server::Response<'_>>,
+    ) -> std::result::Result<russh::server::Auth, Self::Error> {
+        warn!(
+            peer = %self.peer_addr,
+            user,
+            "rejected ssh auth attempt: `keyboard-interactive` method is not supported"
+        );
+        Ok(russh::server::Auth::reject())
+    }
+
+    /// OpenSSH certificate auth is not supported - see [`Self::auth_password`]. Certificates are
+    /// negotiated as a variant of the `publickey` method, so restricting `methods` to
+    /// `publickey` alone doesn't keep a client from attempting this.
+    async fn auth_openssh_certificate(
+        &mut self,
+        user: &str,
+        _certificate: &ssh_key::Certificate,
+    ) -> std::result::Result<russh::server::Auth, Self::Error> {
+        warn!(
+            peer = %self.peer_addr,
+            user,
+            "rejected ssh auth attempt: openssh certificate auth is not supported"
+        );
+        Ok(russh::server::Auth::reject())
+    }
+
+    async fn channel_open_session(
+        &mut self,
+        channel: Channel<russh::server::Msg>,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        reply.accept().await;
+        if let Some(tx) = self.channel_tx.take() {
+            let _ = tx.send(channel);
+        }
+        Ok(())
+    }
+
+    async fn channel_open_x11(
+        &mut self,
+        _channel: Channel<russh::server::Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        reply
+            .reject(ChannelOpenFailure::AdministrativelyProhibited)
+            .await;
+        Ok(())
+    }
+
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        _channel: Channel<russh::server::Msg>,
+        _host_to_connect: &str,
+        _port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        reply
+            .reject(ChannelOpenFailure::AdministrativelyProhibited)
+            .await;
+        Ok(())
+    }
+
+    async fn tcpip_forward(
+        &mut self,
+        _address: &str,
+        _port: &mut u32,
+        _session: &mut russh::server::Session,
+    ) -> std::result::Result<bool, Self::Error> {
+        Ok(false)
+    }
+
+    async fn pty_request(
+        &mut self,
+        channel: ChannelId,
+        _term: &str,
+        _col_width: u32,
+        _row_height: u32,
+        _pix_width: u32,
+        _pix_height: u32,
+        _modes: &[(Pty, u32)],
+        session: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
+
+    async fn x11_request(
+        &mut self,
+        channel: ChannelId,
+        _single_connection: bool,
+        _x11_auth_protocol: &str,
+        _x11_auth_cookie: &str,
+        _x11_screen_number: u32,
+        session: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
+
+    async fn shell_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        _data: &[u8],
+        session: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        _name: &str,
+        session: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_request(session, channel)
+    }
+}
+
+/// Perform the SSH handshake over an already-accepted TCP stream and wait for the client to open
+/// its (single) channel, returning it as a plain `AsyncRead + AsyncWrite` stream.
+///
+/// The session's background message pump is spawned onto its own task since it must keep running
+/// for the lifetime of the connection to drive the returned stream's I/O; it exits on its own once
+/// the returned stream is dropped and the client disconnects.
+pub async fn accept(
+    config: Arc<russh::server::Config>,
+    expected_username: String,
+    expected_client_pubkey: VerifyingKey,
+    stream: TcpStream,
+) -> Result<ServerChannelStream> {
+    let peer_addr = stream.peer_addr()?;
+    let (channel_tx, channel_rx) = oneshot::channel();
+    let handler = ConnectionHandler {
+        channel_tx: Some(channel_tx),
+        expected_username,
+        expected_client_pubkey,
+        peer_addr,
+    };
+
+    let running = russh::server::run_stream(config, stream, handler).await?;
+
+    tokio::spawn(async move {
+        if let Err(err) = running.await {
+            // This fires on ordinary disconnects too (e.g. "early eof" once a client is simply
+            // done), not just failures, so the peer's IP is deliberately not logged here - only
+            // in `ConnectionHandler`'s auth callbacks, which run exclusively on rejected auth.
+            warn!("ssh session ended with error: {err}");
+        }
+    });
+
+    let channel = channel_rx
+        .await
+        .map_err(|_| TransportError::other("ssh session closed before a channel was opened"))?;
+
+    Ok(channel.into_stream())
+}
+
+// ====================================[ Client Side ]====================================
+
+pub use crate::types::ssh::ClientOptions;
+
+struct InnerClientOptions {
+    pub addresses: Vec<SocketAddr>,
+    pub id_pubkey: VerifyingKey,
+    pub username: Option<String>,
+    pub client_banner: Option<String>,
+    /// The pre-shared identity this client authenticates to the server as via SSH `publickey`.
+    pub client_auth_key: russh::keys::PrivateKey,
+}
+
+impl TryFrom<&ClientOptions> for InnerClientOptions {
+    type Error = TransportError;
+    fn try_from(value: &ClientOptions) -> Result<Self> {
+        let id_pubkey = Self::parse_base64_pubkey(&value.id_pubkey)?;
+        let client_auth_key = Self::parse_base64_auth_key(&value.client_auth_key)?;
+
+        Ok(Self {
+            addresses: value.addresses.clone(),
+            id_pubkey,
+            username: value.username.clone(),
+            client_banner: value.client_banner.clone(),
+            client_auth_key,
+        })
+    }
+}
+
+impl InnerClientOptions {
+    fn parse_base64_pubkey(key: impl AsRef<str>) -> Result<VerifyingKey> {
+        let mut pubkey_bytes = [0u8; 32];
+        BASE64_STANDARD
+            .decode_slice(key.as_ref(), &mut pubkey_bytes)
+            .map_err(|e| {
+                TransportError::config_err(format!(
+                    "failed to decode SSH bridge public key as base64: {e}"
+                ))
+            })?;
+        VerifyingKey::from_bytes(&pubkey_bytes)
+            .map_err(|e| TransportError::config_err(format!("bad SSH bridge public key: {e}")))
+    }
+
+    /// Decode the pre-shared ed25519 identity this client authenticates to the server as.
+    fn parse_base64_auth_key(key: impl AsRef<str>) -> Result<russh::keys::PrivateKey> {
+        let source = ServerConfigSource::from_identity_base64(key.as_ref())?;
+        let keypair = ssh_key::private::Ed25519Keypair::from_seed(&source.identity_seed());
+        Ok(keypair.into())
+    }
+}
+
+/// Client-side handler responsible for pinning the server's ed25519 host key against the
+/// configured identity public key.
+///
+/// Everything a malicious or compromised server could use to open a connection back into the
+/// client - forwarded TCP/IP or UDS channels, agent forwarding, X11, or a plain session/direct
+/// channel - is explicitly refused rather than left to whatever the library's default behavior
+/// happens to be, mirroring [`ConnectionHandler`]'s refusal of anything outside the single
+/// client-initiated data channel on the server side.
+struct ClientHandler {
+    id_pubkey: VerifyingKey,
+}
+
+impl ClientHandler {
+    /// Send an explicit channel-open rejection back to the server instead of leaving the
+    /// request without any response.
+    async fn deny_channel_open(reply: russh::client::ChannelOpenHandle) {
+        reply
+            .reject(ChannelOpenFailure::AdministrativelyProhibited)
+            .await;
+    }
+}
+
+impl russh::client::Handler for ClientHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &ssh_key::PublicKey,
+    ) -> std::result::Result<bool, Self::Error> {
+        let Some(ed25519_key) = server_public_key.key_data().ed25519() else {
+            return Ok(false);
+        };
+        Ok(ed25519_key.0 == self.id_pubkey.to_bytes())
+    }
+
+    async fn should_accept_unknown_server_channel(
+        &mut self,
+        _id: ChannelId,
+        _channel_type: &str,
+    ) -> bool {
+        false
+    }
+
+    async fn server_channel_open_session(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_x11(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_direct_tcpip(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _host_to_connect: &str,
+        _port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_direct_streamlocal(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _socket_path: &str,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        _socket_path: &str,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        _channel: Channel<russh::client::Msg>,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        Self::deny_channel_open(reply).await;
+        Ok(())
+    }
+}
+
+/// Build the client-side session configuration (kex/algorithm preferences plus the session
+/// tuning shared with [`ServerConfig::build_server_config`]), optionally overriding the
+/// identification string presented during the handshake.
+fn build_client_config(client_banner: Option<String>) -> russh::client::Config {
+    let mut config = russh::client::Config {
+        keepalive_interval: Some(KEEPALIVE_INTERVAL),
+        inactivity_timeout: Some(INACTIVITY_TIMEOUT),
+        preferred: Preferred {
+            key: std::borrow::Cow::Borrowed(&[ssh_key::Algorithm::Ed25519]),
+            ..Preferred::default()
+        },
+        ..Default::default()
+    };
+    if let Some(client_banner) = client_banner {
+        config.client_id = russh::SshId::Standard(std::borrow::Cow::Owned(client_banner));
+    }
+    config
+}
+
+/// Attempt a TCP connection against every provided address concurrently, and take whichever
+/// succeeds first -- similar in spirit to "happy eyeballs" (RFC 8305), except we don't stagger
+/// the attempts, since we're only ever racing a handful of candidates and a plain TCP connect is
+/// cheap to fire off up front (mirrors the equivalent helper in `transport::tls`).
+///
+/// The losing attempts are dropped (and their sockets closed) once a winner completes.
+pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStream> {
+    info!("initializing from transport identity pubkey");
+    let inner_options = InnerClientOptions::try_from(options)?;
+
+    if inner_options.addresses.is_empty() {
+        return Err(TransportError::config_err(
+            "no ssh bridge address configured",
+        ));
+    }
+
+    let client_config = Arc::new(build_client_config(inner_options.client_banner));
+
+    let handler = ClientHandler {
+        id_pubkey: inner_options.id_pubkey,
+    };
+
+    let attempts = inner_options
+        .addresses
+        .iter()
+        .map(|&addr| Box::pin(TcpStream::connect(addr)));
+
+    let (stream, _losing_attempts) = future::select_ok(attempts).await.inspect_err(|e| {
+        warn!(
+            "failed to connect to any of {} ssh endpoint(s): {e}",
+            inner_options.addresses.len()
+        );
+    })?;
+
+    let mut handle = russh::client::connect_stream(client_config, stream, handler).await?;
+
+    let username = inner_options.username.unwrap_or(DEFAULT_SSH_USER.into());
+    let auth_key = PrivateKeyWithHashAlg::new(Arc::new(inner_options.client_auth_key), None);
+    let auth = handle.authenticate_publickey(&username, auth_key).await?;
+    if !auth.success() {
+        return Err(TransportError::other("ssh server rejected authentication"));
+    }
+
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| TransportError::other(format!("failed to open ssh channel: {e}")))?;
+
+    Ok(channel.into_stream())
+}
+
+#[cfg(test)]
+mod test;

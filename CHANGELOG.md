@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added new ssh transport based on russh (https://github.com/nymtech/nym-bridges/pull/53)
 - dependency version patches (https://github.com/nymtech/nym-bridges/pull/61)
 - TLS transport usable from a unified BridgeConn object (https://github.com/nymtech/nym-bridges/pull/60)
 - `utoipa` support for integration against nym-sdk and nym-smoldvpn

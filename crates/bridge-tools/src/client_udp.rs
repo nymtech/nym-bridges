@@ -131,6 +131,7 @@ async fn handle_session(
     let transport_remote = match &params {
         ClientConfig::QuicPlain(opts) => opts.addresses[0],
         ClientConfig::TlsPlain(opts) => opts.addresses[0],
+        ClientConfig::SshPlain(opts) => opts.addresses[0],
     };
     let session = Session::new(&src, &transport_remote);
 

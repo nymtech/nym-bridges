@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::transport::{quic, tls};
+use crate::transport::{quic, ssh, tls};
 
 // ====================================[ Server Side ]====================================
 
@@ -25,6 +25,7 @@ pub struct ForwardConfig {
 pub enum TransportServerConfig {
     QuicPlain(quic::ServerConfig),
     TlsPlain(tls::ServerConfig),
+    SshPlain(ssh::ServerConfig),
 }
 
 impl From<quic::ServerConfig> for TransportServerConfig {
@@ -36,6 +37,12 @@ impl From<quic::ServerConfig> for TransportServerConfig {
 impl From<tls::ServerConfig> for TransportServerConfig {
     fn from(value: tls::ServerConfig) -> Self {
         TransportServerConfig::TlsPlain(value)
+    }
+}
+
+impl From<ssh::ServerConfig> for TransportServerConfig {
+    fn from(value: ssh::ServerConfig) -> Self {
+        TransportServerConfig::SshPlain(value)
     }
 }
 
@@ -133,6 +140,24 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                         addresses,
                         host: Some("netdna.bootstrapcdn.com".to_string()),
                         id_pubkey,
+                    }));
+                }
+                TransportServerConfig::SshPlain(cfg) => {
+                    let port = cfg.listen.port();
+                    let addresses = ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect();
+                    let id_pubkey = cfg.get_id_pubkey()?.to_string();
+                    let username = cfg.expected_username.clone();
+                    let client_auth_key = cfg
+                        .client_auth_key
+                        .clone()
+                        .context("client_auth_key must be configured for the ssh transport")?;
+                    let client_banner = cfg.client_banner.clone();
+                    transports.push(ClientConfig::SshPlain(ssh::ClientOptions {
+                        addresses,
+                        id_pubkey,
+                        username,
+                        client_auth_key,
+                        client_banner,
                     }));
                 }
             }
@@ -246,6 +271,16 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
             identity_key: Some("fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=".into()),
             private_ed25519_identity_key_file: None,
         };
+        let ssh_cfg1 = ssh::ServerConfig {
+            listen: "[::1]:4422".parse().unwrap(),
+            connection_limit: Default::default(),
+            identity_key: Some("fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=".into()),
+            private_ed25519_identity_key_file: None,
+            expected_username: Some("root".into()),
+            client_auth_key: Some("znYcb6KT1MFExHKKOYGevQErjj2t9hSd2MX6tw+P/H4=".into()),
+            banner: Some("Authorized use only".into()),
+            client_banner: Some("SSH-2.0-OpenSSH_9.6".into()),
+        };
 
         let cfg = PersistedServerConfig {
             forward: ForwardConfig {
@@ -253,7 +288,7 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
             },
             client_params_path: None,
             public_ips: vec!["192.168.0.1".into(), "fe80::1".into()],
-            transports: vec![quic_cfg1.into(), tls_cfg1.into()],
+            transports: vec![quic_cfg1.into(), tls_cfg1.into(), ssh_cfg1.into()],
         };
 
         let client_config = PersistedClientConfig::try_from(&cfg)?;
@@ -274,11 +309,22 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
             host: Some("netdna.bootstrapcdn.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
+        let expected_ssh = ssh::ClientOptions {
+            addresses: vec![
+                "192.168.0.1:4422".parse().unwrap(),
+                "[fe80::1]:4422".parse().unwrap(),
+            ],
+            id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
+            username: Some("root".into()),
+            client_auth_key: "znYcb6KT1MFExHKKOYGevQErjj2t9hSd2MX6tw+P/H4=".into(),
+            client_banner: Some("SSH-2.0-OpenSSH_9.6".into()),
+        };
 
         for transport in client_config.transports {
             match transport {
                 ClientConfig::QuicPlain(cc) => assert_eq!(cc, expected_quic),
                 ClientConfig::TlsPlain(cc) => assert_eq!(cc, expected_tls),
+                ClientConfig::SshPlain(cc) => assert_eq!(cc, expected_ssh),
             }
         }
         Ok(())

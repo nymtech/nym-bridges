@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+pub type Result<T> = std::result::Result<T, TransportError>;
+
 /// Errors that can occur during the forwarding setup or steady state operation.
 #[derive(Debug, Error)]
 #[allow(missing_docs)]
@@ -22,6 +24,9 @@ pub enum TransportError {
 
     #[error("quic crypto config error: {0}")]
     QuicCrypto(#[from] quinn_proto::crypto::rustls::NoInitialCipherSuite),
+
+    #[error("ssh transport error: {0}")]
+    Ssh(#[from] russh::Error),
 
     #[error("transport socket io error")]
     SocketIo(#[source] std::io::Error),
