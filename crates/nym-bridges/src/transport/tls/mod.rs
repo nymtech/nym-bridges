@@ -5,9 +5,10 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use ed25519_dalek::VerifyingKey;
+use futures::future;
 use rustls::pki_types::ServerName;
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::*;
 
@@ -113,13 +114,23 @@ impl InnerClientOptions {
     }
 }
 
+/// Attempt a TCP connection against every provided address concurrently, and take whichever
+/// succeeds first -- similar in spirit to "happy eyeballs" (RFC 8305), except we don't stagger
+/// the attempts (see the equivalent Quic helper in `transport::quic` for why that's a reasonable
+/// simplification here too, given we're only ever racing a handful of candidates).
+///
+/// The losing attempts are dropped (and their sockets closed) once a winner completes.
 pub async fn transport_conn(
     options: &ClientOptions,
-    #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl FnOnce(RawFd),
+    #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, TransportError> {
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
     let verif_key = inner_options.id_pubkey;
+
+    if inner_options.addresses.is_empty() {
+        return Err(TransportError::config_err("No endpoint provided"));
+    }
 
     let crypto_provider = rustls::crypto::CryptoProvider::get_default()
         .unwrap_or(&Arc::new(rustls::crypto::ring::default_provider()))
@@ -144,14 +155,41 @@ pub async fn transport_conn(
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(client_crypto));
 
-    // If no hostname is provided use the IP address of the remote server as the hostname.
+    // If no hostname is provided use the IP address of the first candidate as the hostname.
     let addr_host = inner_options.addresses[0].ip().to_string();
     let host = inner_options.host.clone().unwrap_or(addr_host);
     let sni = ServerName::try_from(host).unwrap();
 
-    let stream = TcpStream::connect(&inner_options.addresses[..]).await?;
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    on_socket_open(stream.as_raw_fd());
+    let attempts = inner_options.addresses.iter().map(|&addr| {
+        Box::pin(connect_one(
+            addr,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            &on_socket_open,
+        ))
+    });
+
+    let (stream, _losing_attempts) = future::select_ok(attempts).await.inspect_err(|e| {
+        warn!(
+            "failed to connect to any of {} endpoint(s): {e}",
+            inner_options.addresses.len()
+        );
+    })?;
 
     Ok(connector.connect(sni, stream).await?)
+}
+
+async fn connect_one(
+    addr: SocketAddr,
+    #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: &impl Fn(RawFd),
+) -> Result<TcpStream, TransportError> {
+    let socket = if addr.is_ipv4() {
+        TcpSocket::new_v4()
+    } else {
+        TcpSocket::new_v6()
+    }
+    .map_err(TransportError::SocketIo)?;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    on_socket_open(socket.as_raw_fd());
+
+    socket.connect(addr).await.map_err(TransportError::SocketIo)
 }

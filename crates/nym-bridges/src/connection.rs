@@ -63,7 +63,7 @@ impl BridgeConn {
     pub async fn try_connect(
         params: ClientConfig,
         token: CancellationToken,
-        #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl FnOnce(RawFd),
+        #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
     ) -> Result<Self, TransportError> {
         let start = Instant::now();
 
