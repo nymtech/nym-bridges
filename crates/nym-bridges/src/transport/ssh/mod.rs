@@ -663,6 +663,9 @@ fn build_client_config(client_banner: Option<String>) -> russh::client::Config {
 /// cheap to fire off up front (mirrors the equivalent helper in `transport::tls`).
 ///
 /// The losing attempts are dropped (and their sockets closed) once a winner completes.
+/// `connect_timeout` bounds the TCP-connect race, the SSH handshake, publickey authentication,
+/// and opening the data channel, all together as a single unit; if that doesn't finish in time,
+/// returns [`TransportError::TimedOut`].
 pub async fn transport_conn(
     options: &ClientOptions,
     connect_timeout: Duration,

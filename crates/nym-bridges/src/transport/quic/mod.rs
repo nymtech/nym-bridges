@@ -200,7 +200,10 @@ impl InnerClientOptions {
 /// the attempts since Quic's connection setup is a handful of UDP packets rather than a stateful
 /// TCP handshake, so racing all candidates up front costs little.
 ///
-/// The losing attempts are dropped (and their sockets closed) once a winner completes.
+/// The losing attempts are dropped (and their sockets closed) once a winner completes. Each
+/// individual attempt is bounded by `connect_timeout`; since every address is raced concurrently
+/// rather than tried in sequence, that same duration bounds the call as a whole. If no address
+/// completes its handshake in time, returns [`TransportError::TimedOut`].
 pub async fn transport_conn(
     options: &ClientOptions,
     #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
@@ -240,6 +243,9 @@ pub async fn transport_conn(
     Ok(conn)
 }
 
+/// Opens a socket against `addr` and drives the Quic handshake to completion, failing with
+/// [`TransportError::TimedOut`] (and closing the endpoint) if it doesn't finish within
+/// `connect_timeout`.
 async fn connect_one(
     addr: SocketAddr,
     host: &str,

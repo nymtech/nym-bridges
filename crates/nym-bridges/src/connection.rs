@@ -67,6 +67,17 @@ impl TransportCloser for () {
 }
 
 impl BridgeConn {
+    /// Establishes a transport connection per `params`, dispatching to the matching transport's
+    /// `transport_conn`.
+    ///
+    /// `conn_timeout` bounds how long the transport-specific connection setup (the QUIC
+    /// handshake, the TCP-connect-plus-TLS-handshake, or the TCP-connect-plus-SSH-handshake-and-
+    /// auth) is allowed to take, falling back to [`DEFAULT_CONNECT_TIMEOUT`] if not given; once it
+    /// elapses the attempt fails with [`TransportError::TimedOut`]. This is distinct from
+    /// [`crate::forward::UdpForwarder::launch_initiator`]'s `initial_conn_timeout`, which bounds a
+    /// later, unrelated phase -- how long the forwarder waits for the first local packet once this
+    /// transport connection is already up. `token` cancels the attempt early, independent of
+    /// either timeout.
     pub async fn try_connect(
         params: ClientConfig,
         token: CancellationToken,

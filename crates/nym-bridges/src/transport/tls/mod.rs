@@ -120,6 +120,9 @@ impl InnerClientOptions {
 /// simplification here too, given we're only ever racing a handful of candidates).
 ///
 /// The losing attempts are dropped (and their sockets closed) once a winner completes.
+/// `connect_timeout` bounds the TCP-connect race and the subsequent TLS handshake with the
+/// winner together, as a single unit; if that combined step doesn't finish in time, returns
+/// [`TransportError::TimedOut`].
 pub async fn transport_conn(
     options: &ClientOptions,
     #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
