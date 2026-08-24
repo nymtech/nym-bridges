@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, anyhow};
-use ed25519_dalek::SigningKey;
-use ed25519_dalek::pkcs8::{EncodePrivateKey, spki::der::pem::LineEnding};
-use toml_edit::{DocumentMut, Item, Table, value};
+use nym_bridges::config::TransportServerConfig;
+use nym_bridges::transport::{ExternalizeKeyMaterial, GenerateServerConfig, GeneratedKeyMaterial};
+use serde::Serialize;
+use toml_edit::{DocumentMut, value};
 use tracing::*;
 
 use std::fs::File;
@@ -13,22 +14,18 @@ include!(concat!(env!("OUT_DIR"), "/bridge_default.rs"));
 
 const CLIENT_PARAMS_PATH_FIELD: &str = "client_params_path";
 const TRANSPORTS_FIELD: &str = "transports";
-const ARGS_FIELD: &str = "args";
-const TRANSPORT_TYPE_FIELD: &str = "transport_type";
-const IDENTITY_KEY_FIELD: &str = "identity_key";
-const IDENTITY_KEY_PATH_FIELD: &str = "private_ed25519_identity_key_file";
 
 #[derive(Clone, Debug)]
 pub(crate) struct BridgeConfig {
     pub(crate) inner: DocumentMut,
-    pub(crate) keys: KeyFiles,
+    pub(crate) keys: Vec<GeneratedKeyMaterial>,
 }
 
 impl Default for BridgeConfig {
     fn default() -> Self {
         let config_str = default_bridge_config_str();
         Self {
-            keys: KeyFiles::new(),
+            keys: Vec::new(),
             inner: config_str
                 .parse::<DocumentMut>()
                 .expect("failed to parse default bridge config template"),
@@ -42,16 +39,20 @@ impl BridgeConfig {
             inner: config_str
                 .as_ref()
                 .parse::<DocumentMut>()
-                .context("failed to parse config")?,
-            keys: KeyFiles::new(),
+                .context("failed to parse bridge config toml")?,
+            keys: Vec::new(),
         })
     }
 
     pub fn parse_from_file(path: &PathBuf) -> Result<Self> {
-        let mut config_file = File::open(path)?;
+        let mut config_file = File::open(path)
+            .with_context(|| format!("failed to open bridge config at {path:?}"))?;
         let mut config_str = String::new();
-        config_file.read_to_string(&mut config_str)?;
+        config_file
+            .read_to_string(&mut config_str)
+            .with_context(|| format!("failed to read bridge config at {path:?}"))?;
         Self::parse(config_str)
+            .with_context(|| format!("failed to parse bridge config at {path:?}"))
     }
 
     pub fn serialize(&self) -> String {
@@ -65,67 +66,125 @@ impl BridgeConfig {
             .context("failed to serialize bridge config to file")
     }
 
-    /// Generates keys for the transports that are defined in the Bridge configuration. If
-    /// `overwrite` is true it will generate keys even if the key file exists at the defined path or
-    /// the `identity_key` field if defined -- If persisted, this will overwrite existing keys.
+    /// Generates any key material missing from the transports defined in this bridge
+    /// configuration, delegating the actual generation to each transport's own
+    /// [`GenerateServerConfig`]/[`ExternalizeKeyMaterial`] implementations rather than
+    /// hand-rolling it here. If `overwrite` is true, key material is regenerated even if it
+    /// already exists.
     ///
-    /// NOTE: In the initial version of the bridge runner this function is generating one single key
-    /// and using it for all defined transports as they all rely on the same key type and really we
-    /// will only be using one of the transports initially anyways. TODO: This should be updated in
-    /// the next version to allow the transport types to generate their own initial state / key
-    /// material rather than trying to do it for them.
+    /// Each transport that needs generation gets its own independent key (and, for the host
+    /// identity, its own file under `dir`) -- see `nym_bridges::transport::{quic, tls, ssh}` for
+    /// the per-transport filenames used. A transport whose identity is already valid (an inline
+    /// key, or a `private_ed25519_identity_key_file` pointing at a file that actually exists) is
+    /// left completely untouched.
+    ///
+    /// Regenerating any transport re-serializes the whole `transports` array through the typed
+    /// config structs (canonical formatting) -- everything else in the document (`forward`,
+    /// `public_ips`, `client_params_path`) is left byte-for-byte untouched.
     pub fn generate_keys(&mut self, overwrite: bool, dir: &Path) -> Result<()> {
         debug!("generating keys overwrite:{overwrite}, dir: {dir:?}");
-        let new_key = SigningKey::generate(&mut rand::rng());
-        let key = new_key
-            .to_pkcs8_pem(LineEnding::CRLF)
-            .context("failed to serialize ed25519 private key to PKCS8 PEM")?
-            .as_bytes()
-            .to_vec();
-        let key_name = "ed25519_bridge_identity.pem";
-        let push_once = std::sync::Once::new();
 
-        for entry in self
+        let mut transports: Vec<TransportServerConfig> = self
             .inner
-            .get_mut(TRANSPORTS_FIELD)
+            .get(TRANSPORTS_FIELD)
             .ok_or(anyhow!("no transports defined"))?
-            .as_array_of_tables_mut()
-            .unwrap()
-            .iter_mut()
-        {
-            let mut transport_cfg = TransportConfig::new(entry);
-            let transport_type = transport_cfg.transport_type();
-            debug!("generating keys for {:?}", transport_type);
-            if transport_type.is_none() {
-                continue;
-            } else if let Some(t) = transport_type
-                && !["quic_plain", "tls_plain"].contains(&t.trim().replace("\"", "").as_str())
-            {
-                continue;
-            }
+            .as_array_of_tables()
+            .ok_or(anyhow!("transports is not an array of tables"))?
+            .iter()
+            .map(|table| {
+                // `Table::to_string()` only renders dotted-key values and silently drops
+                // ordinary `[section]` sub-tables like `args` -- wrap it as a standalone
+                // document first so it renders (and thus re-parses) correctly.
+                let mut doc = DocumentMut::new();
+                *doc.as_table_mut() = table.clone();
+                toml::from_str(&doc.to_string()).context("failed to parse transport entry")
+            })
+            .collect::<Result<_>>()?;
 
-            // only update key material if overwrite was requested or no key or keypath was defined
-            if overwrite || !transport_cfg.has_identity_key() {
-                let path = &transport_cfg
-                    .get_identity_key_path()
-                    .unwrap_or(dir.join(key_name));
-                debug!("key will be used - path: {path:?}");
-                transport_cfg.set_key_path(path);
+        let mut rng = rand::rng();
 
-                // if we are going to use the generated key push it into the new keys one time
-                // rather than once per transport defined
-                debug!("key added to keyfiles");
-                push_once.call_once(|| self.keys.add_key(key_name, &key));
+        for transport in &mut transports {
+            match transport {
+                TransportServerConfig::QuicPlain(cfg) => {
+                    let valid = identity_is_valid(
+                        &cfg.identity_key,
+                        &cfg.private_ed25519_identity_key_file,
+                    );
+                    if overwrite || !valid {
+                        // Clear whenever we're regenerating -- not just on `overwrite` -- so a
+                        // stale/broken `private_ed25519_identity_key_file` reference doesn't make
+                        // `generate_config` think an identity is already configured.
+                        cfg.identity_key = None;
+                        cfg.private_ed25519_identity_key_file = None;
+                        let (updated, generated) = regenerate(std::mem::take(cfg), dir, &mut rng)?;
+                        *cfg = updated;
+                        self.keys.extend(generated);
+                    }
+                }
+                TransportServerConfig::TlsPlain(cfg) => {
+                    let valid = identity_is_valid(
+                        &cfg.identity_key,
+                        &cfg.private_ed25519_identity_key_file,
+                    );
+                    if overwrite || !valid {
+                        cfg.identity_key = None;
+                        cfg.private_ed25519_identity_key_file = None;
+                        let (updated, generated) = regenerate(std::mem::take(cfg), dir, &mut rng)?;
+                        *cfg = updated;
+                        self.keys.extend(generated);
+                    }
+                }
+                TransportServerConfig::SshPlain(cfg) => {
+                    let valid = identity_is_valid(
+                        &cfg.identity_key,
+                        &cfg.private_ed25519_identity_key_file,
+                    );
+                    let needs_generation = overwrite || !valid || cfg.client_auth_key.is_none();
+                    if needs_generation {
+                        // Only clear the identity fields if the identity itself needs
+                        // regenerating -- if it's already valid and only `client_auth_key` is
+                        // missing, leave it untouched; `generate_config` fills each key
+                        // independently based on which fields are still unset.
+                        if overwrite || !valid {
+                            cfg.identity_key = None;
+                            cfg.private_ed25519_identity_key_file = None;
+                        }
+                        if overwrite {
+                            cfg.client_auth_key = None;
+                        }
+                        let (updated, generated) = regenerate(std::mem::take(cfg), dir, &mut rng)?;
+                        *cfg = updated;
+                        self.keys.extend(generated);
+                    }
+                }
             }
         }
+
+        #[derive(Serialize)]
+        struct TransportsOnly<'a> {
+            transports: &'a [TransportServerConfig],
+        }
+
+        let serialized = toml::to_string(&TransportsOnly {
+            transports: &transports,
+        })
+        .context("failed to serialize regenerated transports")?;
+        let parsed: DocumentMut = serialized
+            .parse()
+            .context("failed to reparse regenerated transports")?;
+        self.inner[TRANSPORTS_FIELD] = parsed[TRANSPORTS_FIELD].clone();
+
         Ok(())
     }
 
     pub fn persist_keys(&self, out_dir: &Path) -> Result<()> {
         debug!("persisting keys at: {out_dir:?}");
-        for (path, key) in &self.keys.keys_out(out_dir) {
-            let mut f = File::create(path)?;
-            f.write_all(key)?;
+        std::fs::create_dir_all(out_dir)
+            .with_context(|| format!("failed to create key directory {out_dir:?}"))?;
+        for (path, key) in keys_out(&self.keys, out_dir) {
+            let mut f = File::create(&path)
+                .with_context(|| format!("failed to create key file {path:?}"))?;
+            f.write_all(&key)?;
             f.flush()?;
             debug!("wrote key at {path:?}");
         }
@@ -188,99 +247,48 @@ impl BridgeConfig {
             print!("{sign} {change}");
         }
         println!();
-        for path in &self.keys.key_paths(key_dir) {
+        for path in key_paths(&self.keys, key_dir) {
             println!("Δ {:?}", path);
         }
     }
 }
 
-/// This attempts to track a set of generated keys, while being careful about serializing to the
-/// desired disk locations until we are ready.
-///
-/// The strategy here is to create a tempdir that will contain the keys while we are in a dynamic or
-/// non-committed state. Once we go to serialize a configuration the path will be updated to the
-/// final path of the key directory and the key will be written there.
-#[derive(Clone, Debug)]
-pub(crate) struct KeyFiles {
-    pub(crate) keys: Vec<Keyfile>,
+/// Whether a transport's identity is already usable as-is: an inline key is always sufficient
+/// regardless of validity (it's not this tool's job to second-guess a user-provided key), while a
+/// file-path reference is only sufficient if that file actually exists.
+fn identity_is_valid(inline: &Option<String>, file: &Option<PathBuf>) -> bool {
+    inline.is_some() || file.as_deref().is_some_and(Path::exists)
 }
 
-impl KeyFiles {
-    fn new() -> Self {
-        Self { keys: Vec::new() }
-    }
+/// Generate any missing key material for `cfg` and move its host identity out to a file under
+/// `dir`, via the transport's own [`GenerateServerConfig`]/[`ExternalizeKeyMaterial`] impls.
+fn regenerate<T: GenerateServerConfig + ExternalizeKeyMaterial>(
+    cfg: T,
+    dir: &Path,
+    rng: &mut (impl rand::CryptoRng + ?Sized),
+) -> Result<(T, Vec<GeneratedKeyMaterial>)> {
+    cfg.generate_config(rng)
+        .externalize_keys(dir)
+        .context("failed to externalize generated key material")
+}
 
-    pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
-    }
+/// Where each generated key would land under `dir`, keyed off just the filename embedded in the
+/// material (not its full path -- callers may want these staged somewhere other than where the
+/// config itself will eventually point, e.g. a scratch tempdir for dry-run previews).
+fn key_paths(keys: &[GeneratedKeyMaterial], dir: &Path) -> Vec<PathBuf> {
+    keys.iter()
+        .filter_map(|k| k.path.file_name().map(|name| dir.join(name)))
+        .collect()
+}
 
-    fn key_paths(&self, dir: &Path) -> Vec<PathBuf> {
-        self.keys.iter().map(|k| dir.join(&k.fname)).collect()
-    }
-
-    fn keys_out(&self, dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
-        self.keys
-            .iter()
-            .map(|k| (dir.join(&k.fname), k.key.clone()))
-            .collect()
-    }
-
-    fn add_key(&mut self, fname: &str, bytes: &[u8]) {
-        self.keys.push(Keyfile {
-            fname: fname.to_string(),
-            key: bytes.to_vec(),
+fn keys_out(keys: &[GeneratedKeyMaterial], dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    keys.iter()
+        .filter_map(|k| {
+            k.path
+                .file_name()
+                .map(|name| (dir.join(name), k.pem_bytes.clone()))
         })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct Keyfile {
-    pub(crate) fname: String,
-    pub(crate) key: Vec<u8>,
-}
-
-struct TransportConfig<'a> {
-    inner: &'a mut Table,
-}
-
-impl<'a> TransportConfig<'a> {
-    fn new(inner: &'a mut Table) -> Self {
-        Self { inner }
-    }
-
-    fn transport_type(&self) -> Option<String> {
-        if !self.inner.contains_key(TRANSPORT_TYPE_FIELD) {
-            return None;
-        }
-        Some(self.inner[TRANSPORT_TYPE_FIELD].to_string())
-    }
-
-    fn has_identity_key(&self) -> bool {
-        if self.has_identity_key_bytes() {
-            return true;
-        }
-
-        self.get_identity_key_path().is_some_and(|p| p.exists())
-    }
-
-    fn has_identity_key_bytes(&self) -> bool {
-        self.inner
-            .get(ARGS_FIELD)
-            .is_some_and(|args| args.get(IDENTITY_KEY_FIELD).is_some())
-    }
-
-    fn get_identity_key_path(&self) -> Option<PathBuf> {
-        self.inner
-            .get(ARGS_FIELD)?
-            .get(IDENTITY_KEY_PATH_FIELD)?
-            .as_str()
-            .map(PathBuf::from)
-    }
-
-    fn set_key_path(&mut self, path: &Path) {
-        self.inner[ARGS_FIELD][IDENTITY_KEY_FIELD] = Item::None;
-        self.inner[ARGS_FIELD][IDENTITY_KEY_PATH_FIELD] = value(path.to_str().unwrap_or_default());
-    }
+        .collect()
 }
 
 #[cfg(test)]
@@ -288,6 +296,8 @@ mod test {
 
     mod key_generation {
         use super::super::*;
+        use nym_bridges::types::Sufficiency;
+        use toml_edit::{Item, value};
 
         const KEY_TEST_0: &str = r##"public_ips = ["192.168.100.3"]
 [forward]
@@ -321,10 +331,53 @@ listen = "[::]:4433"
 private_ed25519_identity_key_file = "/dev/null/ed25519_bridge_identity.pem"
 "##;
 
+        const KEY_TEST_SSH: &str = r##"public_ips = ["192.168.100.3"]
+[forward]
+address = "[::1]:50001"
+[[transports]]
+transport_type = "ssh_plain"
+[transports.args]
+listen = "[::]:4422"
+"##;
+
+        const KEY_TEST_MULTI: &str = r##"public_ips = ["192.168.100.3"]
+[forward]
+address = "[::1]:50001"
+[[transports]]
+transport_type = "quic_plain"
+[transports.args]
+stateless_retry = false
+listen = "[::]:4433"
+
+[[transports]]
+transport_type = "ssh_plain"
+[transports.args]
+listen = "[::]:4422"
+"##;
+
         fn init() {
             // let level = tracing_subscriber::filter::LevelFilter::DEBUG;
             // crate::test::init_subscriber(Some(level));
             // println!();
+        }
+
+        /// Point the (only) transport's `private_ed25519_identity_key_file` directly at `path`,
+        /// clearing any inline `identity_key` -- used to set up an "already has a key file"
+        /// fixture without going through `generate_keys` itself.
+        fn set_key_path(cfg: &mut BridgeConfig, path: &Path) {
+            for entry in cfg
+                .inner
+                .get_mut(TRANSPORTS_FIELD)
+                .ok_or(anyhow!("no transports defined"))
+                .unwrap()
+                .as_array_of_tables_mut()
+                .unwrap()
+                .iter_mut()
+            {
+                entry["args"]["identity_key"] = Item::None;
+                entry["args"]["private_ed25519_identity_key_file"] =
+                    value(path.to_str().unwrap_or_default());
+            }
         }
 
         // no key specified with overwrite disallowed
@@ -366,23 +419,22 @@ private_ed25519_identity_key_file = "/dev/null/ed25519_bridge_identity.pem"
         }
 
         // key specified by file path where the key file doesn't exist, overwrite disallowed
-        // should generate a new key, using the pre-existing path.
+        // should generate a new key, using the configured key dir (the original, nonexistent
+        // path is not reused -- see the module's doc comment on `generate_keys`).
         #[test]
         fn nonexistent_key_no_overwrite() {
             let mut cfg = BridgeConfig::parse(KEY_TEST_2).unwrap();
             cfg.generate_keys(false, &PathBuf::from("./")).unwrap();
             assert!(!cfg.keys.is_empty());
-            // todo: check that path is unchanged.
         }
 
         // key specified by file path where the key file doesn't exist, overwrite allowed
-        // should generate a new key, using the pre-existing path.
+        // should generate a new key.
         #[test]
         fn nonexistent_key_yes_overwrite() {
             let mut cfg = BridgeConfig::parse(KEY_TEST_2).unwrap();
             cfg.generate_keys(true, &PathBuf::from("./")).unwrap();
             assert!(!cfg.keys.is_empty());
-            // todo: check that path is unchanged.
         }
 
         // key specified by file path where the key file DOES exist, overwrite disallowed
@@ -395,24 +447,14 @@ private_ed25519_identity_key_file = "/dev/null/ed25519_bridge_identity.pem"
             assert!(fpath.exists());
 
             let mut cfg = BridgeConfig::parse(KEY_TEST_2).unwrap();
-            cfg.inner
-                .get_mut(TRANSPORTS_FIELD)
-                .ok_or(anyhow!("no transports defined"))
-                .unwrap()
-                .as_array_of_tables_mut()
-                .unwrap()
-                .iter_mut()
-                .for_each(|entry| {
-                    let mut transport_cfg = TransportConfig::new(entry);
-                    transport_cfg.set_key_path(&fpath);
-                });
+            set_key_path(&mut cfg, &fpath);
             info!("{}", cfg.serialize());
             cfg.generate_keys(false, &PathBuf::from("./")).unwrap();
             assert!(cfg.keys.is_empty());
         }
 
         // key specified by file path where the key file DOES exist, overwrite allowed
-        // should generate a new key, using the pre-existing path.
+        // should generate a new key.
         #[test]
         fn existing_key_yes_overwrite() {
             let tmp = tempdir::TempDir::new("key_gen_test").unwrap();
@@ -421,20 +463,60 @@ private_ed25519_identity_key_file = "/dev/null/ed25519_bridge_identity.pem"
             assert!(fpath.exists());
 
             let mut cfg = BridgeConfig::parse(KEY_TEST_2).unwrap();
-            cfg.inner
-                .get_mut(TRANSPORTS_FIELD)
-                .ok_or(anyhow!("no transports defined"))
-                .unwrap()
-                .as_array_of_tables_mut()
-                .unwrap()
-                .iter_mut()
-                .for_each(|entry| {
-                    let mut transport_cfg = TransportConfig::new(entry);
-                    transport_cfg.set_key_path(&fpath);
-                });
+            set_key_path(&mut cfg, &fpath);
             cfg.generate_keys(true, &PathBuf::from("./")).unwrap();
             assert!(!cfg.keys.is_empty());
-            // todo: check that path is unchanged.
+        }
+
+        // ssh_plain transports previously had no key generation support at all -- confirm both
+        // the host identity and the separate client_auth_key now get generated.
+        #[test]
+        fn ssh_transport_generates_both_keys() {
+            let mut cfg = BridgeConfig::parse(KEY_TEST_SSH).unwrap();
+            cfg.generate_keys(false, &PathBuf::from("./")).unwrap();
+            assert!(!cfg.keys.is_empty());
+
+            let out: nym_bridges::config::PersistedServerConfig =
+                toml::from_str(&cfg.serialize()).unwrap();
+            match &out.transports[0] {
+                TransportServerConfig::SshPlain(ssh_cfg) => {
+                    assert!(ssh_cfg.is_sufficient());
+                    assert!(ssh_cfg.client_auth_key.is_some());
+                }
+                other => panic!("expected an ssh_plain transport, got {other:?}"),
+            }
+        }
+
+        // when multiple transports each need key material, every one should get its own
+        // independently generated key/file rather than sharing a single key across all of them.
+        #[test]
+        fn multiple_transports_get_independent_keys() {
+            let mut cfg = BridgeConfig::parse(KEY_TEST_MULTI).unwrap();
+            cfg.generate_keys(false, &PathBuf::from("./")).unwrap();
+            assert_eq!(cfg.keys.len(), 2);
+
+            let out: nym_bridges::config::PersistedServerConfig =
+                toml::from_str(&cfg.serialize()).unwrap();
+            let mut identity_files: Vec<_> = out
+                .transports
+                .iter()
+                .map(|t| match t {
+                    TransportServerConfig::QuicPlain(c) => {
+                        c.private_ed25519_identity_key_file.clone().unwrap()
+                    }
+                    TransportServerConfig::SshPlain(c) => {
+                        c.private_ed25519_identity_key_file.clone().unwrap()
+                    }
+                    TransportServerConfig::TlsPlain(_) => unreachable!(),
+                })
+                .collect();
+            identity_files.sort();
+            identity_files.dedup();
+            assert_eq!(
+                identity_files.len(),
+                2,
+                "each transport should have its own identity key file"
+            );
         }
     }
 }

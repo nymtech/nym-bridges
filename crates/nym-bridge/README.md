@@ -116,29 +116,38 @@ $HOME/.nym/nym-nodes/default-nym-node/
     ├── aes128ctr_auth_ack
     ├── aes128ctr_ipr_ack
     ├── …
-    ├── (+) ed25519_bridge_identity.pem
+    ├── (+) quic_ed25519_identity.pem
+    ├── (+) tls_ed25519_identity.pem
+    ├── (+) ssh_ed25519_identity.pem
     ├── …
 ```
 
 
 #### 1) Key Generation
 
-Generating Keys - The current transports (Quic and TLS – although we are only supporting Quic in the
-client initially) both require an ED25519 key to secure the bridge transport connection. The key
-needs to be either base64 encoded in the identity_key field in the configuration OR written in pkcs8
-PEM format wih the path provided in the `private_ed25519_identity_key_file` field of the
-configuration.
+Generating Keys - The current transports (`quic_plain`, `tls_plain`, and `ssh_plain`) all require an
+ED25519 key to secure the bridge transport connection. The key needs to be either base64 encoded in
+the `identity_key` field in the configuration OR written in pkcs8 PEM format with the path provided
+in the `private_ed25519_identity_key_file` field of the configuration. Each transport should use its
+own, independently generated key -- `bridge-cfg --gen` does this for you (see [Configure](#configure)
+above); the manual steps below are for anyone who wants to generate the key material by hand instead.
 
 ```sh
 sudo apt-get install openssl
 
-# Generate the ed25519 private key
+# Generate an ed25519 private key -- repeat per transport, using a distinct file name for each
+# (e.g. quic_ed25519_identity.pem, tls_ed25519_identity.pem, ssh_ed25519_identity.pem) so that
+# each transport gets its own key rather than sharing one.
 openssl genpkey -algorithm Ed25519 -out private_key.pem
-mv private_key.pem /home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_bridge_identity.pem
+mv private_key.pem /home/nym/.nym/nym-nodes/default-nym-node/data/quic_ed25519_identity.pem
 
 # Derive and format the associated ed25519 public key Base64 encoded (used in the id_pubkey field in the client parameters)
 openssl pkey -in private_key.pem -pubout | grep -v "\---" | base64 --decode | tail -c 32 | base64
 ```
+
+For `ssh_plain`, a second, separate key must also be generated for `client_auth_key` (the key the
+server uses to authenticate the client during the SSH handshake) -- follow the same steps with
+another output filename.
 
 #### 2) Bridge Configuration
 The configuration for the nym-bridge runner includes the server side parameters for the running
@@ -192,7 +201,7 @@ listen = "[::]:4443"
 # connection_limit = 0
 
 # Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based self signed certs
-private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity'
+private_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/quic_ed25519_identity.pem'
 
 # Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
 # certificates. Used only if `private_ed25519_identity_key_file` is not provided.
@@ -210,11 +219,30 @@ listen = "[::]:4443"
 # connection_limit = 0
 
 # Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based self signed certs
-private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity'
+private_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/tls_ed25519_identity.pem'
 
 # Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
 # certificates. Used only if `private_ed25519_identity_key_file` is not provided.
 # identity_key = "<base64 encoded identity private key>"
+
+
+[[transports]]
+transport_type = "ssh_plain"
+
+[transports.args]
+# Address to listen on
+listen = "[::]:4422"
+
+# Path to file containing PKCS8 PEM encoded ed25519 identity private key, used as the SSH host key
+private_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ssh_ed25519_identity.pem'
+
+# Base64 encoded Identity Key string. Used only if `private_ed25519_identity_key_file` is not provided.
+# identity_key = "<base64 encoded ed25519 identity private key>"
+
+# Base64 encoded Identity Key string. The server derives the associated public key from it and
+# only accepts `publickey` authentication proving ownership of that exact keypair. This is a
+# second, separate key from the host identity above -- generate it independently.
+client_auth_key = "<base64 encoded ed25519 identity private key>"
 ```
 
 </details>
@@ -229,9 +257,15 @@ Fields requiring manual review:
 
 - `transports.args.identity_key` OR `transports.args.private_ed25519_identity_key_file` - Either a
   base64 encoded Ed25519 private key or the path the a PKCS8 PEM encoded ED25519 private key file.
-  This is the key used to secure the transport connection. If a key was generated using openssl as
-  described above, this is the place for the path to the private key.
-  - `private_ed25519_identity_key_file = /home/nym/.nym/nym-nodes/default-nym-node/data/ed25519_bridge_identity.pem`
+  This is the key used to secure the transport connection. Each transport should get its own,
+  independently generated key -- do not point multiple transports at the same key file. If a key
+  was generated using openssl as described above, this is the place for the path to the private key.
+  - `private_ed25519_identity_key_file = /home/nym/.nym/nym-nodes/default-nym-node/data/quic_ed25519_identity.pem`
+
+- `transports.args.client_auth_key` (`ssh_plain` only) - A second, separate base64 encoded Ed25519
+  private key (not the host identity key above) that the server uses to authenticate connecting
+  clients via SSH `publickey` auth. This same key must also be given to the client (as
+  `client_auth_key` in the client parameters file, see below).
 
 #### 3) Bridge client parameter file
 
@@ -242,14 +276,18 @@ Once created this file needs saved (e.g.
 `$HOME/.nym/nym-nodes/default-nym-node/config/client_bridge_params.json`). The path in the
 nym-bridge configuration needs to point to this file. 
 
-For the Quic (and TLS) transport the id_pubkey field is a base64 encoded ed25519 verifying (public) key.
+For all three transports the `id_pubkey` field is a base64 encoded ed25519 verifying (public) key,
+derived from that transport's own identity key. For `ssh_plain`, `client_auth_key` must also be
+included -- it's the private key half of the pre-shared identity the server authenticates the
+client against (see the `client_auth_key` note in [Bridge Configuration](#2-bridge-configuration)
+above), and `username` must match the server's configured `expected_username` (`ubuntu` by default).
 
 <details>
 <summary>Example Client Parameters File</summary>
 
 ```json
 {
-    "version": 0,
+    "version": "0",
     "transports": [
         {
             "transport_type": "quic_plain",
@@ -257,6 +295,15 @@ For the Quic (and TLS) transport the id_pubkey field is a base64 encoded ed25519
                 "addresses": ["[2a01:7e00::f03c:95ff:fef8:77f]:4443", "178.79.168.250:4443"],
                 "id_pubkey": "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=",
                 "host": "netdna.bootstrapcdn.com"
+            }
+        },
+        {
+            "transport_type": "ssh_plain",
+            "args": {
+                "addresses": ["[2a01:7e00::f03c:95ff:fef8:77f]:4422", "178.79.168.250:4422"],
+                "id_pubkey": "z2RmwvxjJH1WdKr08bYAoUuMxrTeqXWSPXVAT9IPS7g=",
+                "username": "ubuntu",
+                "client_auth_key": "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
             }
         }
     ]
