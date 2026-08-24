@@ -369,6 +369,7 @@ pub mod initiator {
     /// underlying transport connection (not just the `reader`/`writer` split
     /// from it) always ends cleanly. `close_tx`, if provided, is signalled
     /// once the forwarder has shut down.
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_udp<R, W>(
         reader: R,
         writer: W,
