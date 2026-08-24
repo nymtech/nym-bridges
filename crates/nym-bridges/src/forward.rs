@@ -324,6 +324,7 @@ impl UdpForwarder {
         bind_addr: Option<SocketAddr>,
         close_tx: Option<UnboundedSender<()>>,
         token: CancellationToken,
+        initial_conn_timeout: Option<Duration>,
     ) -> Result<(SocketAddr, JoinHandle<()>), TransportError> {
         let bind_addr = bind_addr.unwrap_or(match egress_conn.endpoint.is_ipv4() {
             true => (Ipv4Addr::LOCALHOST, 0).into(),
@@ -345,6 +346,7 @@ impl UdpForwarder {
                 ETHERNET_V2_MTU,
                 close_tx,
                 token,
+                initial_conn_timeout,
             )),
         ))
     }
@@ -376,6 +378,7 @@ pub mod initiator {
         // close_hook: Option<fn(SocketAddr)>,
         close_tx: Option<UnboundedSender<()>>,
         token: CancellationToken,
+        initial_conn_timeout: Option<Duration>,
     ) where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
@@ -392,9 +395,10 @@ pub mod initiator {
             .length_field_length(LENGTH_DELIMITER_BYTELEN)
             .new_read(reader);
 
+        let conn_timeout = initial_conn_timeout.unwrap_or(INITIAL_CONNECTION_TIMEOUT);
         // receive (and forward) a first message to establish a consistent peer address
         let fwd_initial_recv_fut =
-            tokio::time::timeout(INITIAL_CONNECTION_TIMEOUT, sock.recv_buf_from(&mut dn_buf));
+            tokio::time::timeout(conn_timeout, sock.recv_buf_from(&mut dn_buf));
 
         let fwd_addr = match token.run_until_cancelled(fwd_initial_recv_fut).await {
             Some(res) => {
