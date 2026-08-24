@@ -110,6 +110,38 @@ impl ServerConfig {
     }
 }
 
+impl crate::transport::GenerateServerConfig for ServerConfig {
+    fn generate_config<R: rand::CryptoRng + ?Sized>(mut self, rng: &mut R) -> Self {
+        if self.identity_key.is_none() && self.private_ed25519_identity_key_file.is_none() {
+            self.identity_key = Some(ServerConfigSource::generate(rng).to_base64());
+        }
+        self
+    }
+}
+
+impl crate::types::Sufficiency for ServerConfig {
+    /// Whether this config has an identity key source (inline or file-backed) to build a
+    /// listener from -- see [`ServerConfig::get_crypto_source`].
+    fn is_sufficient(&self) -> bool {
+        self.identity_key.is_some() || self.private_ed25519_identity_key_file.is_some()
+    }
+}
+
+impl crate::transport::ExternalizeKeyMaterial for ServerConfig {
+    fn externalize_keys(
+        mut self,
+        dir: &std::path::Path,
+    ) -> Result<(Self, Vec<crate::transport::GeneratedKeyMaterial>), TransportError> {
+        let generated = crate::transport::externalize_identity(
+            &mut self.identity_key,
+            &mut self.private_ed25519_identity_key_file,
+            dir,
+            "quic_ed25519_identity.pem",
+        )?;
+        Ok((self, generated))
+    }
+}
+
 pub fn create_endpoint(options: &ServerConfig) -> Result<quinn::Endpoint, TransportError> {
     let mut server_crypto = options.build_server_config()?;
 
@@ -345,4 +377,59 @@ fn create_quic_config(options: &InnerClientOptions) -> Result<quinn::ClientConfi
     client_config.transport_config(Arc::new(transport_cfg));
 
     Ok(client_config)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::transport::{ExternalizeKeyMaterial, GenerateServerConfig};
+
+    #[test]
+    fn sufficiency_reflects_whether_key_material_is_present() {
+        use crate::types::Sufficiency;
+
+        assert!(!ServerConfig::default().is_sufficient());
+        assert!(
+            ServerConfig::default()
+                .generate_config(&mut rand::rng())
+                .is_sufficient()
+        );
+    }
+
+    #[test]
+    fn quic_generate_config_embeds_fresh_identity_inline() {
+        let config = ServerConfig::default().generate_config(&mut rand::rng());
+
+        assert!(config.identity_key.is_some());
+        assert!(config.private_ed25519_identity_key_file.is_none());
+    }
+
+    #[test]
+    fn quic_externalize_keys_moves_inline_identity_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ServerConfig::default().generate_config(&mut rand::rng());
+
+        let (config, generated) = config.externalize_keys(dir.path()).unwrap();
+
+        assert!(config.identity_key.is_none());
+        assert_eq!(
+            config.private_ed25519_identity_key_file,
+            Some(dir.path().join("quic_ed25519_identity.pem"))
+        );
+        assert_eq!(generated.len(), 1);
+        assert_eq!(
+            generated[0].path,
+            dir.path().join("quic_ed25519_identity.pem")
+        );
+
+        // persist the material at the path externalize_keys embedded in the config, and confirm
+        // it round-trips through the normal key-loading path from there.
+        std::fs::write(&generated[0].path, &generated[0].pem_bytes).unwrap();
+        assert!(
+            ServerConfigSource::from_pkcs8_pem_file(
+                config.private_ed25519_identity_key_file.as_ref().unwrap()
+            )
+            .is_ok()
+        );
+    }
 }

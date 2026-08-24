@@ -70,6 +70,38 @@ impl ServerConfig {
     }
 }
 
+impl crate::transport::GenerateServerConfig for ServerConfig {
+    fn generate_config<R: rand::CryptoRng + ?Sized>(mut self, rng: &mut R) -> Self {
+        if self.identity_key.is_none() && self.private_ed25519_identity_key_file.is_none() {
+            self.identity_key = Some(ServerConfigSource::generate(rng).to_base64());
+        }
+        self
+    }
+}
+
+impl crate::types::Sufficiency for ServerConfig {
+    /// Whether this config has an identity key source (inline or file-backed) to build a
+    /// listener from -- see [`ServerConfig::get_crypto_source`].
+    fn is_sufficient(&self) -> bool {
+        self.identity_key.is_some() || self.private_ed25519_identity_key_file.is_some()
+    }
+}
+
+impl crate::transport::ExternalizeKeyMaterial for ServerConfig {
+    fn externalize_keys(
+        mut self,
+        dir: &std::path::Path,
+    ) -> Result<(Self, Vec<crate::transport::GeneratedKeyMaterial>), TransportError> {
+        let generated = crate::transport::externalize_identity(
+            &mut self.identity_key,
+            &mut self.private_ed25519_identity_key_file,
+            dir,
+            "tls_ed25519_identity.pem",
+        )?;
+        Ok((self, generated))
+    }
+}
+
 pub fn create_listener(options: &ServerConfig) -> Result<TlsAcceptor, TransportError> {
     let server_crypto = options.build_server_config()?;
 
@@ -209,4 +241,37 @@ async fn connect_one(
     on_socket_open(socket.as_raw_fd());
 
     socket.connect(addr).await.map_err(TransportError::SocketIo)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::transport::GenerateServerConfig;
+
+    #[test]
+    fn sufficiency_reflects_whether_key_material_is_present() {
+        use crate::types::Sufficiency;
+
+        assert!(!ServerConfig::default().is_sufficient());
+        assert!(
+            ServerConfig::default()
+                .generate_config(&mut rand::rng())
+                .is_sufficient()
+        );
+    }
+
+    #[test]
+    fn generate_config_reuses_provided_identity_without_generating() {
+        let config = ServerConfig {
+            identity_key: Some("fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=".into()),
+            ..Default::default()
+        }
+        .generate_config(&mut rand::rng());
+
+        assert_eq!(
+            config.identity_key,
+            Some("fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=".to_string())
+        );
+        assert!(config.private_ed25519_identity_key_file.is_none());
+    }
 }

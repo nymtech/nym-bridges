@@ -168,6 +168,42 @@ impl ServerConfig {
     }
 }
 
+impl crate::transport::GenerateServerConfig for ServerConfig {
+    fn generate_config<R: rand::CryptoRng + ?Sized>(mut self, rng: &mut R) -> Self {
+        if self.identity_key.is_none() && self.private_ed25519_identity_key_file.is_none() {
+            self.identity_key = Some(ServerConfigSource::generate(rng).to_base64());
+        }
+        if self.client_auth_key.is_none() {
+            self.client_auth_key = Some(ServerConfigSource::generate(rng).to_base64());
+        }
+        self
+    }
+}
+
+impl crate::types::Sufficiency for ServerConfig {
+    /// Whether this config has both a host identity key source (inline or file-backed, see
+    /// [`ServerConfig::get_crypto_source`]) and a `client_auth_key` to build a listener from.
+    fn is_sufficient(&self) -> bool {
+        (self.identity_key.is_some() || self.private_ed25519_identity_key_file.is_some())
+            && self.client_auth_key.is_some()
+    }
+}
+
+impl crate::transport::ExternalizeKeyMaterial for ServerConfig {
+    fn externalize_keys(
+        mut self,
+        dir: &std::path::Path,
+    ) -> Result<(Self, Vec<crate::transport::GeneratedKeyMaterial>)> {
+        let generated = crate::transport::externalize_identity(
+            &mut self.identity_key,
+            &mut self.private_ed25519_identity_key_file,
+            dir,
+            "ssh_ed25519_identity.pem",
+        )?;
+        Ok((self, generated))
+    }
+}
+
 /// Build the shared SSH server configuration (host key + kex/algorithm preferences) used to
 /// handshake every accepted connection.
 pub fn create_listener(options: &ServerConfig) -> Result<Arc<russh::server::Config>> {

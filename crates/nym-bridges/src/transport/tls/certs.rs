@@ -338,6 +338,30 @@ impl ServerConfigSource {
     pub fn identity_seed(&self) -> [u8; 32] {
         self.0
     }
+
+    /// Generate a fresh ed25519 identity using `rng`, for transports generating a server
+    /// configuration with no pre-existing key material to reuse.
+    pub fn generate<R: rand::CryptoRng + ?Sized>(rng: &mut R) -> Self {
+        Self::from_identity(SigningKey::generate(rng).to_bytes())
+    }
+
+    /// Encode as a PKCS8 PEM private key, for identities that need to be persisted to disk.
+    pub fn to_pkcs8_pem_bytes(&self) -> Result<Vec<u8>, TransportError> {
+        let pem = SigningKey::from_bytes(&self.0)
+            .to_pkcs8_pem(LineEnding::LF)
+            .map_err(|e| {
+                TransportError::config_err(format!(
+                    "failed to encode identity key as PKCS8 PEM: {e}"
+                ))
+            })?;
+        Ok(pem.as_bytes().to_vec())
+    }
+
+    /// Encode as the base64 form used for inline (`identity_key`/`client_auth_key`) config
+    /// fields.
+    pub fn to_base64(&self) -> String {
+        BASE64_STANDARD.encode(self.0)
+    }
 }
 
 #[cfg(test)]
