@@ -144,7 +144,9 @@ async fn client_server_handshake_and_echo() {
         client_auth_key,
         client_banner: None,
     };
-    let mut client_stream = transport_conn(&client_opts).await.unwrap();
+    let mut client_stream = transport_conn(&client_opts, Duration::from_secs(5))
+        .await
+        .unwrap();
     client_stream.write_all(b"hello").await.unwrap();
 
     let mut buf = [0u8; 5];
@@ -196,7 +198,7 @@ async fn client_rejects_mismatched_host_key() {
         client_auth_key,
         client_banner: None,
     };
-    let result = transport_conn(&client_opts).await;
+    let result = transport_conn(&client_opts, Duration::from_secs(5)).await;
     assert!(result.is_err());
 
     let _ = server_task.await;
@@ -239,7 +241,7 @@ async fn client_rejects_mismatched_username() {
         client_auth_key,
         client_banner: None,
     };
-    let result = transport_conn(&client_opts).await;
+    let result = transport_conn(&client_opts, Duration::from_secs(5)).await;
     assert!(result.is_err());
 
     let _ = server_task.await;
@@ -286,7 +288,7 @@ async fn client_rejects_mismatched_auth_key() {
         client_auth_key: generate_auth_key(),
         client_banner: None,
     };
-    let result = transport_conn(&client_opts).await;
+    let result = transport_conn(&client_opts, Duration::from_secs(5)).await;
     assert!(
         result.is_err(),
         "client presenting a different auth keypair than the server expects should be rejected"
@@ -395,7 +397,11 @@ async fn client_presents_configured_banner_as_ssh_id() {
     };
     // The handshake itself will fail since nothing on the other end speaks SSH past the
     // identification exchange; only the client's outgoing id string matters for this test.
-    let _ = tokio::time::timeout(Duration::from_secs(5), transport_conn(&client_opts)).await;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        transport_conn(&client_opts, Duration::from_secs(5)),
+    )
+    .await;
 
     let received = server_task.await.unwrap();
     assert!(
@@ -627,7 +633,7 @@ async fn server_honors_configured_expected_username() {
         client_auth_key: client_auth_key.clone(),
         client_banner: None,
     };
-    transport_conn(&matching_client)
+    transport_conn(&matching_client, Duration::from_secs(5))
         .await
         .expect("client presenting the configured username should be accepted");
 
@@ -640,7 +646,7 @@ async fn server_honors_configured_expected_username() {
         client_auth_key,
         client_banner: None,
     };
-    let result = transport_conn(&default_username_client).await;
+    let result = transport_conn(&default_username_client, Duration::from_secs(5)).await;
     assert!(
         result.is_err(),
         "client presenting the default username should be rejected by a server configured with a custom one"

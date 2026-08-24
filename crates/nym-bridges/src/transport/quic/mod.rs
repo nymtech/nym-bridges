@@ -204,6 +204,7 @@ impl InnerClientOptions {
 pub async fn transport_conn(
     options: &ClientOptions,
     #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
+    connect_timeout: Duration,
 ) -> Result<quinn::Connection, TransportError> {
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
@@ -225,6 +226,7 @@ pub async fn transport_conn(
             client_config.clone(),
             #[cfg(any(target_os = "linux", target_os = "android"))]
             &on_socket_open,
+            connect_timeout,
         ))
     });
 
@@ -243,6 +245,7 @@ async fn connect_one(
     host: &str,
     client_config: quinn::ClientConfig,
     #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: &impl Fn(RawFd),
+    connect_timeout: Duration,
 ) -> Result<quinn::Connection, TransportError> {
     let bind_addr = match addr.is_ipv4() {
         true => (Ipv4Addr::UNSPECIFIED, 0).into(),
@@ -254,7 +257,7 @@ async fn connect_one(
 
     let runtime =
         quinn::default_runtime().ok_or_else(|| TransportError::other("no async runtime found"))?;
-    let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
+    let endpoint = quinn::Endpoint::new_with_abstract_socket(
         Default::default(),
         None,
         runtime
@@ -263,12 +266,22 @@ async fn connect_one(
         runtime,
     )
     .map_err(TransportError::SocketIo)?;
-    endpoint.set_default_client_config(client_config);
 
-    endpoint
-        .connect(addr, host)?
-        .await
-        .map_err(TransportError::QuicProto)
+    let connecting = endpoint
+        .connect_with(client_config, addr, host)
+        .map_err(TransportError::Quic)?;
+
+    match tokio::time::timeout(connect_timeout, connecting).await {
+        Ok(connection) => connection.map_err(TransportError::QuicProto),
+        Err(_) => {
+            tracing::warn!("QUIC bridge connection to {addr} timed out after {connect_timeout:?}");
+            endpoint.close(0u32.into(), b"timeout");
+            // TimedOut has no error_state_reason, so tunnel_monitor propagates it as
+            // TunnelMonitorEvent::Down { error_state_reason: None }, which triggers
+            // ConnectingState::reconnect() with a different gateway selection.
+            Err(TransportError::TimedOut(connect_timeout))
+        }
+    }
 }
 
 /// Create a client configuration for the quinn Quic client.

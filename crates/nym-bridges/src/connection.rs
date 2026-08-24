@@ -2,7 +2,7 @@
 use std::os::fd::RawFd;
 use std::{
     net::{Ipv4Addr, SocketAddr},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -12,6 +12,13 @@ use tracing::*;
 use crate::transport::{quic, ssh, tls};
 use crate::{config::ClientConfig, error::TransportError};
 use nym_bridges_types::TransportAssociation;
+
+/// Default cap on how long establishing the transport connection (the QUIC handshake, the
+/// TCP-connect-plus-TLS-handshake, or the TCP-connect-plus-SSH-handshake-and-auth, depending on
+/// transport) may take before giving up, when the caller of [`BridgeConn::try_connect`] doesn't
+/// provide one of their own. Resolved once here so every transport enforces the same default
+/// instead of each carrying its own constant that could drift out of sync.
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn make_socket(addr: Option<SocketAddr>) -> std::io::Result<std::net::UdpSocket> {
     let addr = addr.unwrap_or((Ipv4Addr::UNSPECIFIED, 0).into());
@@ -64,8 +71,10 @@ impl BridgeConn {
         params: ClientConfig,
         token: CancellationToken,
         #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
+        conn_timeout: Option<Duration>,
     ) -> Result<Self, TransportError> {
         let start = Instant::now();
+        let connect_timeout = conn_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT);
 
         match params {
             ClientConfig::QuicPlain(ref opts) => {
@@ -74,6 +83,7 @@ impl BridgeConn {
                         opts,
                         #[cfg(any(target_os = "linux", target_os = "android"))]
                         on_socket_open,
+                        connect_timeout,
                     ))
                     .await
                     .ok_or(TransportError::Cancelled)??;
@@ -99,6 +109,7 @@ impl BridgeConn {
                         opts,
                         #[cfg(any(target_os = "linux", target_os = "android"))]
                         on_socket_open,
+                        connect_timeout,
                     ))
                     .await
                     .ok_or(TransportError::Cancelled)??;
@@ -124,7 +135,7 @@ impl BridgeConn {
                     TransportError::config_err("no ssh bridge address configured")
                 })?;
                 let stream = token
-                    .run_until_cancelled(ssh::transport_conn(opts))
+                    .run_until_cancelled(ssh::transport_conn(opts, connect_timeout))
                     .await
                     .ok_or(TransportError::Cancelled)??;
                 let (reader, writer) = tokio::io::split(stream);

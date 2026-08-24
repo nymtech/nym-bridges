@@ -1,6 +1,6 @@
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::{AsRawFd, RawFd};
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
@@ -123,6 +123,7 @@ impl InnerClientOptions {
 pub async fn transport_conn(
     options: &ClientOptions,
     #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
+    connect_timeout: Duration,
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, TransportError> {
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
@@ -168,14 +169,27 @@ pub async fn transport_conn(
         ))
     });
 
-    let (stream, _losing_attempts) = future::select_ok(attempts).await.inspect_err(|e| {
-        warn!(
-            "failed to connect to any of {} endpoint(s): {e}",
-            inner_options.addresses.len()
-        );
-    })?;
+    let connect = async {
+        let (stream, _losing_attempts) = future::select_ok(attempts).await.inspect_err(|e| {
+            warn!(
+                "failed to connect to any of {} endpoint(s): {e}",
+                inner_options.addresses.len()
+            );
+        })?;
 
-    Ok(connector.connect(sni, stream).await?)
+        connector
+            .connect(sni, stream)
+            .await
+            .map_err(TransportError::from)
+    };
+
+    match tokio::time::timeout(connect_timeout, connect).await {
+        Ok(result) => result,
+        Err(_) => {
+            warn!("TLS bridge connection timed out after {connect_timeout:?}");
+            Err(TransportError::TimedOut(connect_timeout))
+        }
+    }
 }
 
 async fn connect_one(

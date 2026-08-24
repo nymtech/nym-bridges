@@ -162,6 +162,7 @@ async fn transport_session(
         token.clone(),
         #[cfg(any(target_os = "linux", target_os = "android"))]
         |_| {},
+        None,
     )
     .await
     .context("failed to connect to transport conn")?;

@@ -663,7 +663,10 @@ fn build_client_config(client_banner: Option<String>) -> russh::client::Config {
 /// cheap to fire off up front (mirrors the equivalent helper in `transport::tls`).
 ///
 /// The losing attempts are dropped (and their sockets closed) once a winner completes.
-pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStream> {
+pub async fn transport_conn(
+    options: &ClientOptions,
+    connect_timeout: Duration,
+) -> Result<ClientChannelStream> {
     info!("initializing from transport identity pubkey");
     let inner_options = InnerClientOptions::try_from(options)?;
 
@@ -679,33 +682,43 @@ pub async fn transport_conn(options: &ClientOptions) -> Result<ClientChannelStre
         id_pubkey: inner_options.id_pubkey,
     };
 
-    let attempts = inner_options
-        .addresses
-        .iter()
-        .map(|&addr| Box::pin(TcpStream::connect(addr)));
+    let connect = async {
+        let attempts = inner_options
+            .addresses
+            .iter()
+            .map(|&addr| Box::pin(TcpStream::connect(addr)));
 
-    let (stream, _losing_attempts) = future::select_ok(attempts).await.inspect_err(|e| {
-        warn!(
-            "failed to connect to any of {} ssh endpoint(s): {e}",
-            inner_options.addresses.len()
-        );
-    })?;
+        let (stream, _losing_attempts) = future::select_ok(attempts).await.inspect_err(|e| {
+            warn!(
+                "failed to connect to any of {} ssh endpoint(s): {e}",
+                inner_options.addresses.len()
+            );
+        })?;
 
-    let mut handle = russh::client::connect_stream(client_config, stream, handler).await?;
+        let mut handle = russh::client::connect_stream(client_config, stream, handler).await?;
 
-    let username = inner_options.username.unwrap_or(DEFAULT_SSH_USER.into());
-    let auth_key = PrivateKeyWithHashAlg::new(Arc::new(inner_options.client_auth_key), None);
-    let auth = handle.authenticate_publickey(&username, auth_key).await?;
-    if !auth.success() {
-        return Err(TransportError::other("ssh server rejected authentication"));
+        let username = inner_options.username.unwrap_or(DEFAULT_SSH_USER.into());
+        let auth_key = PrivateKeyWithHashAlg::new(Arc::new(inner_options.client_auth_key), None);
+        let auth = handle.authenticate_publickey(&username, auth_key).await?;
+        if !auth.success() {
+            return Err(TransportError::other("ssh server rejected authentication"));
+        }
+
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| TransportError::other(format!("failed to open ssh channel: {e}")))?;
+
+        Ok(channel.into_stream())
+    };
+
+    match tokio::time::timeout(connect_timeout, connect).await {
+        Ok(result) => result,
+        Err(_) => {
+            warn!("SSH bridge connection timed out after {connect_timeout:?}");
+            Err(TransportError::TimedOut(connect_timeout))
+        }
     }
-
-    let channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|e| TransportError::other(format!("failed to open ssh channel: {e}")))?;
-
-    Ok(channel.into_stream())
 }
 
 #[cfg(test)]
