@@ -136,6 +136,7 @@ async fn process<RW>(
         token.clone(),
         #[cfg(any(target_os = "linux", target_os = "android"))]
         |_| {},
+        None,
     )
     .await
     {

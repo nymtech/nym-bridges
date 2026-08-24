@@ -44,6 +44,7 @@
 //!     shutdown_token.clone(),
 //!     #[cfg(any(target_os = "linux", target_os = "android"))]
 //!     SOCKET_OPEN_NOP,
+//!     None, // use the default transport connection timeout
 //! )
 //! .await?;
 //!
@@ -53,6 +54,7 @@
 //!     None,
 //!     None,
 //!     shutdown_token.clone(),
+//!     None, // use the default initial-packet timeout
 //! )
 //! .await?;
 //!

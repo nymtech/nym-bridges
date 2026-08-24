@@ -52,6 +52,9 @@ pub enum TransportError {
     #[error("transport connection was cancelled")]
     Cancelled,
 
+    #[error("connection timed out after {0:?}")]
+    TimedOut(std::time::Duration),
+
     #[error("transport error: {0}")]
     Other(String),
 }

@@ -318,12 +318,17 @@ impl UdpForwarder {
     /// hand it to whatever local application should send/receive on it) and a
     /// handle to the spawned forwarding task. If `close_tx` is provided, a
     /// message is sent on it once the forwarder shuts down. `token` cancels
-    /// the forwarder early.
+    /// the forwarder early. `initial_conn_timeout` bounds how long the spawned
+    /// task waits for that first datagram before giving up, falling back to
+    /// `INITIAL_CONNECTION_TIMEOUT` if not given -- this is unrelated to (and
+    /// runs entirely after) whatever timeout bounded establishing
+    /// `egress_conn` itself via [`crate::connection::BridgeConn::try_connect`].
     pub async fn launch_initiator(
         egress_conn: BridgeConn,
         bind_addr: Option<SocketAddr>,
         close_tx: Option<UnboundedSender<()>>,
         token: CancellationToken,
+        initial_conn_timeout: Option<Duration>,
     ) -> Result<(SocketAddr, JoinHandle<()>), TransportError> {
         let bind_addr = bind_addr.unwrap_or(match egress_conn.endpoint.is_ipv4() {
             true => (Ipv4Addr::LOCALHOST, 0).into(),
@@ -345,6 +350,7 @@ impl UdpForwarder {
                 ETHERNET_V2_MTU,
                 close_tx,
                 token,
+                initial_conn_timeout,
             )),
         ))
     }
@@ -357,16 +363,15 @@ pub mod initiator {
 
     /// Drives a single UDP forwarder over `sock` and the transport `reader`/`writer`.
     ///
-    /// Blocks (without spawning) until either the first datagram is received on
-    /// `sock` -- establishing the peer address the socket then `connect()`s to
-    /// -- or `INITIAL_CONNECTION_TIMEOUT` elapses / `token` is cancelled, in
-    /// which case the function returns having done nothing further. Once the
-    /// peer address is established, spawns the steady-state forwarding tasks
-    /// and runs until either side exits or `token` is cancelled, cancelling the
-    /// other task in turn. `closer` is closed on every exit path, so the
-    /// underlying transport connection (not just the `reader`/`writer` split
-    /// from it) always ends cleanly. `close_tx`, if provided, is signalled
-    /// once the forwarder has shut down.
+    /// Blocks (without spawning) until either the first datagram is received on `sock` --
+    /// establishing the peer address the socket then `connect()`s to -- or `initial_conn_timeout`
+    /// (default `INITIAL_CONNECTION_TIMEOUT` if not given) elapses / `token` is cancelled, in
+    /// which case the function returns having done nothing further. Once the peer address is
+    /// established, spawns the steady-state forwarding tasks and runs until either side exits or
+    /// `token` is cancelled, cancelling the other task in turn. `closer` is closed on every exit
+    /// path, so the underlying transport connection (not just the `reader`/`writer` split from it)
+    /// always ends cleanly. `close_tx`, if provided, is signalled once the forwarder has shut down.
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_udp<R, W>(
         reader: R,
         writer: W,
@@ -376,6 +381,7 @@ pub mod initiator {
         // close_hook: Option<fn(SocketAddr)>,
         close_tx: Option<UnboundedSender<()>>,
         token: CancellationToken,
+        initial_conn_timeout: Option<Duration>,
     ) where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
@@ -392,9 +398,10 @@ pub mod initiator {
             .length_field_length(LENGTH_DELIMITER_BYTELEN)
             .new_read(reader);
 
+        let conn_timeout = initial_conn_timeout.unwrap_or(INITIAL_CONNECTION_TIMEOUT);
         // receive (and forward) a first message to establish a consistent peer address
         let fwd_initial_recv_fut =
-            tokio::time::timeout(INITIAL_CONNECTION_TIMEOUT, sock.recv_buf_from(&mut dn_buf));
+            tokio::time::timeout(conn_timeout, sock.recv_buf_from(&mut dn_buf));
 
         let fwd_addr = match token.run_until_cancelled(fwd_initial_recv_fut).await {
             Some(res) => {
