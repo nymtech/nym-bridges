@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-25
+
 ### Added
 
 - Added new ssh transport based on russh (https://github.com/nymtech/nym-bridges/pull/53)
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Changed license version from GPL_v3 to dual MIT & APACHE-2.0 (https://github.com/nymtech/nym-bridges/pull/63)
 - attempt connection open to all addresses provided in a ClientConfig using happy eyeballs (https://github.com/nymtech/nym-bridges/pull/64)
 - removed filter to ipv4 only from quic_plain transport (https://github.com/nymtech/nym-bridges/pull/64)
+- expanded bridge-cfg to include management for ssh and tls transports (https://github.com/nymtech/nym-bridges/pull/68)
 
 ### Fixed
 
