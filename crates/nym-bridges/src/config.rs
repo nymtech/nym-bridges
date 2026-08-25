@@ -46,6 +46,16 @@ impl From<ssh::ServerConfig> for TransportServerConfig {
     }
 }
 
+impl crate::types::Sufficiency for TransportServerConfig {
+    fn is_sufficient(&self) -> bool {
+        match self {
+            TransportServerConfig::QuicPlain(cfg) => cfg.is_sufficient(),
+            TransportServerConfig::TlsPlain(cfg) => cfg.is_sufficient(),
+            TransportServerConfig::SshPlain(cfg) => cfg.is_sufficient(),
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub struct PersistedServerConfig {
     /// Configuration responsible for handling client traffic forwarding to the listening nym-node.
@@ -327,6 +337,56 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
                 ClientConfig::SshPlain(cc) => assert_eq!(cc, expected_ssh),
             }
         }
+        Ok(())
+    }
+
+    /// Every transport's `generate_config` should produce a config that's immediately
+    /// [`Sufficiency::is_sufficient`], and that sufficiency should carry through the conversion
+    /// to the client side, which is what actually gets handed out to connecting clients.
+    #[test]
+    fn generated_configs_and_their_derived_client_configs_are_sufficient() -> Result<()> {
+        use crate::transport::GenerateServerConfig;
+        use crate::types::Sufficiency;
+
+        let mut rng = rand::rng();
+        let transports: Vec<TransportServerConfig> = vec![
+            quic::ServerConfig::default()
+                .generate_config(&mut rng)
+                .into(),
+            tls::ServerConfig::default()
+                .generate_config(&mut rng)
+                .into(),
+            ssh::ServerConfig::default()
+                .generate_config(&mut rng)
+                .into(),
+        ];
+
+        for transport in &transports {
+            assert!(
+                transport.is_sufficient(),
+                "generated {transport:?} should be sufficient"
+            );
+        }
+
+        let server_cfg = PersistedServerConfig {
+            forward: ForwardConfig {
+                address: "[::1]:50001".parse().unwrap(),
+            },
+            client_params_path: None,
+            public_ips: vec!["192.168.0.1".into()],
+            transports,
+        };
+
+        let client_cfg = PersistedClientConfig::try_from(&server_cfg)?;
+        assert_eq!(client_cfg.transports.len(), 3);
+
+        for transport in &client_cfg.transports {
+            assert!(
+                transport.is_sufficient(),
+                "client config derived from a generated server config should be sufficient, got {transport:?}"
+            );
+        }
+
         Ok(())
     }
 }

@@ -34,55 +34,55 @@ listen = "[::]:4443"
 
 # Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based
 # self signed certs
-# private_ed25519_identity_key_file = '/etc/nym/keys/ed25519_bridge_identity.pem'
+# private_ed25519_identity_key_file = '/etc/nym/keys/quic_ed25519_identity.pem'
 
 # Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
 # certificates. Used only if `private_ed25519_identity_key_file` is not provided.
 # identity_key = "<base64 encoded identity private key>"
 
 
-# [[transports]]
-# transport_type = "tls_plain"
+[[transports]]
+transport_type = "tls_plain"
 
-# [transports.args]
-# # (TCP) Socket address to listen on
-# listen = "[::]:4443"
+[transports.args]
+# (TCP) Socket address to listen on
+listen = "[::]:4443"
 
-# # Maximum number of concurrent connections to allow
-# # connection_limit = 0
+# Maximum number of concurrent connections to allow
+# connection_limit = 0
 
-# # Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based
-# # self signed certs
-# private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_bridge_identity.pem'
+# Path to file containing PKCS8 PEM encoded ed25519 identity private key, for use in ED25519 based
+# self signed certs
+# private_ed25519_identity_key_file = '/etc/nym/keys/tls_ed25519_identity.pem'
 
-# # Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
-# # certificates. Used only if `private_ed25519_identity_key_file` is not provided.
-# # identity_key = "<base64 encoded identity private key>"
+# Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
+# certificates. Used only if `private_ed25519_identity_key_file` is not provided.
+# identity_key = "<base64 encoded identity private key>"
 
 
-# [[transports]]
-# transport_type = "ssh_plain"
-# 
-# [transports.args]
-# # (TCP) Socket address to listen on
-# listen = "[::]:4422"
-# 
-# # Path to file containing PEM encoded ed25519 identity private key, for use in ED25519 based self signed certs
-# # private_ed25519_identity_key_file = '/etc/nym/default-nym-node/bridges/ed25519_identity'
-# 
-# # Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
-# # certificates. Used only if `private_ed25519_identity_key_file` is not provided.
+[[transports]]
+transport_type = "ssh_plain"
+
+[transports.args]
+# (TCP) Socket address to listen on
+listen = "[::]:4422"
+
+# Path to file containing PEM encoded ed25519 identity private key, for use in ED25519 based self signed certs
+# private_ed25519_identity_key_file = '/etc/nym/keys/ssh_ed25519_identity.pem'
+
+# Base64 encoded Identity Key string. This is used to secure connections using ED25519 self signed
+# certificates. Used only if `private_ed25519_identity_key_file` is not provided.
 # identity_key = "<base64 encoded ed25519 identity private key>"
-#
-# # Base64 encoded Identity Key string. The server derives the associated public key from it and
-# # only accepts `publickey` authentication proving ownership of that exact keypair.
+
+# Base64 encoded Identity Key string. The server derives the associated public key from it and
+# only accepts `publickey` authentication proving ownership of that exact keypair.
 # client_auth_key = "<base64 encoded ed25519 identity private key>"
-# 
-# # SSH identification string this server should present in place of the underlying SSH
-# # library's default, sent as a plaintext line at the very start of the protocol.
+
+# SSH identification string this server should present in place of the underlying SSH
+# library's default, sent as a plaintext line at the very start of the protocol.
 # banner = "SSH-2.0-OpenSSH_9.6"
 
-# # SSH identification string that connecting clients should present in place of the
-# # underlying SSH library's default, copied into the generated client configuration. Used
-# # for on-the-wire fingerprint management to masquerade as alternative SSH implementations.
+# SSH identification string that connecting clients should present in place of the
+# underlying SSH library's default, copied into the generated client configuration. Used
+# for on-the-wire fingerprint management to masquerade as alternative SSH implementations.
 # client_banner = "SSH-2.0-OpenSSH_9.6"

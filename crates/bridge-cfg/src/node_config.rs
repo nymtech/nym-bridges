@@ -42,17 +42,20 @@ impl NodeConfig {
             inner: config_str
                 .as_ref()
                 .parse::<DocumentMut>()
-                .context("failed to parse config")?,
+                .context("failed to parse node config toml")?,
         };
         Ok(Self { inner })
     }
 
     pub fn parse_from_file(path: &PathBuf) -> Result<Self> {
-        let mut config_file = File::open(path)?;
+        let mut config_file =
+            File::open(path).with_context(|| format!("failed to open node config at {path:?}"))?;
         let mut config_str = String::new();
-        config_file.read_to_string(&mut config_str)?;
+        config_file
+            .read_to_string(&mut config_str)
+            .with_context(|| format!("failed to read node config at {path:?}"))?;
 
-        Self::parse(config_str)
+        Self::parse(config_str).with_context(|| format!("failed to parse node config at {path:?}"))
     }
 
     pub fn new_without_node() -> Self {

@@ -30,10 +30,18 @@ $HOME/.nym/nym-nodes/default-nym-node/
 
 /etc/nym/
 ├── keys 
-│   └── (+) ed25519_bridge_identity.pem
+│   ├── (+) quic_ed25519_identity.pem
+│   ├── (+) tls_ed25519_identity.pem
+│   └── (+) ssh_ed25519_identity.pem
 ├── (+) client_bridge_params.json
 └── (+) bridges.toml
 ```
+
+By default, `--gen` generates independent key material for all three supported transports
+(`quic_plain`, `tls_plain`, `ssh_plain`) -- each gets its own identity key file, and `ssh_plain`
+additionally gets its own `client_auth_key` (stored inline in `bridges.toml`, not as a separate
+file). Remove a transport's `[[transports]]` entry from `bridges.toml` if you don't want it
+running.
 
 ## Usage
 
@@ -96,37 +104,40 @@ This will result in the following output:
  > "crates/bridge-cfg/test/config.toml":
 ...
 - bridge_client_params = '/home/nym/.nym/nym-nodes/default-nym-node/config/client_bridge_params.json'
-+ bridge_client_params = "crates/bridge-cfg/test/client_bridge_params.json
++ bridge_client_params = "crates/bridge-cfg/test/client_bridge_params.json"
 ...
 
  > "crates/bridge-cfg/test/client_bridge_params.json":
-+ {"version":"0.0.0","transports":[{"transport_type":"quic_plain","args":{"addresses":["192.168.0.1:4443","[fe80::1]:4443"],"host":null,"id_pubkey":"lmv/PMS1MQ0G71hUljt6BWpLhvBK1DyiozEF7Ux/HPo="}}]}
++ {"version":"0","transports":[{"transport_type":"quic_plain","args":{"addresses":["192.168.0.1:4443","[fe80::1]:4443"],"host":"netdna.bootstrapcdn.com","id_pubkey":"lmv/PMS1MQ0G71hUljt6BWpLhvBK1DyiozEF7Ux/HPo="}},{"transport_type":"tls_plain","args":{"addresses":["192.168.0.1:4443","[fe80::1]:4443"],"host":"netdna.bootstrapcdn.com","id_pubkey":"z2RmwvxjJH1WdKr08bYAoUuMxrTeqXWSPXVAT9IPS7g="}},{"transport_type":"ssh_plain","args":{"addresses":["192.168.0.1:4422","[fe80::1]:4422"],"id_pubkey":"gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=","username":null,"client_auth_key":"fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=","client_banner":null}}]}
 
  > "crates/bridge-cfg/test/bridges.toml":
-  # Nym Bridge Gateway Runner Configuration
-...
-- client_params_path = "/etc/nym/default-nym-node/client_bridge_params.json"
++ # Nym Bridge Gateway Runner Configuration
++ #
++ # [version 0] - this is an initial implementation and the configuration handling will likely change
++ # going forward.
++ 
 + client_params_path = "crates/bridge-cfg/test/client_bridge_params.json"
-...
-
-  # Target address where client traffic will be forwarded.
-  #
-  # If running in parallel with `nym-node` this should match with your public IP and announced wireguard port.
-- address = "[::1]:51822"
++ public_ips = ["192.168.0.1", "fe80::1"]
++ 
++ [forward]
 + address = "1.1.1.1:51822"
-  
-  [[transports]]
-  transport_type = "quic_plain"
-  
-  [transports.args]
-  # Enable stateless retries
-  stateless_retry = false
-  
-  # (UDP) Socket address to listen on
-  listen = "[::]:4443"
-+ private_ed25519_identity_key_file = "crates/bridge-cfg/test/keys/ed25519_bridge_identity.pem"
++ [[transports]]
++ transport_type = "quic_plain"
++ 
++ [transports.args]
++ stateless_retry = false
++ listen = "[::]:4443"
++ private_ed25519_identity_key_file = "crates/bridge-cfg/test/keys/quic_ed25519_identity.pem"
 ...
 ```
+
+(`bridges.toml` here is generated from scratch -- no `-i` was given -- so every line is new. elided
+above: `tls_plain` and `ssh_plain` are generated the same way, each getting its own
+`[[transports]]` entry and its own identity key file under `crates/bridge-cfg/test/keys/`. Note
+also that when `-i` points at an *existing* `bridges.toml`, regenerating a transport's keys
+re-serializes just that transport's `[[transports]]` entry through the typed config structs, so
+any comments under that specific entry are dropped -- comments elsewhere in the file, and on
+transports that already had valid key material, are left untouched.)
 
 #### Refreshing IP Configuration
 

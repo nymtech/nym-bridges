@@ -3,6 +3,8 @@ use ed25519_dalek::SigningKey;
 use russh::ChannelMsg;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::transport::{ExternalizeKeyMaterial, GenerateServerConfig};
+
 /// Generate a fresh base64-encoded ed25519 private key for use as a test `client_auth_key`. The
 /// same string must be configured on both the server (`ServerConfig::client_auth_key`) and the
 /// client (`ClientOptions::client_auth_key`) attempting to authenticate against it.
@@ -61,6 +63,64 @@ async fn spawn_test_server() -> (SocketAddr, String) {
     });
 
     (addr, client_auth_key)
+}
+
+#[test]
+fn sufficiency_reflects_whether_key_material_is_present() {
+    use crate::types::Sufficiency;
+
+    // ssh additionally requires a client_auth_key even once the host identity is generated.
+    let host_identity_only = ServerConfig {
+        identity_key: Some(ServerConfigSource::generate(&mut rand::rng()).to_base64()),
+        ..Default::default()
+    };
+    assert!(!host_identity_only.is_sufficient());
+    assert!(
+        ServerConfig::default()
+            .generate_config(&mut rand::rng())
+            .is_sufficient()
+    );
+}
+
+#[test]
+fn externalize_keys_only_moves_host_identity_client_auth_key_stays_inline() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = ServerConfig::default().generate_config(&mut rand::rng());
+    let inline_client_auth_key = config.client_auth_key.clone();
+
+    let (config, generated) = config.externalize_keys(dir.path()).unwrap();
+
+    assert!(config.identity_key.is_none());
+    assert_eq!(
+        config.private_ed25519_identity_key_file,
+        Some(dir.path().join("ssh_ed25519_identity.pem"))
+    );
+    assert_eq!(generated.len(), 1);
+    // client_auth_key has no file-backed form, so it's untouched by externalization.
+    assert_eq!(config.client_auth_key, inline_client_auth_key);
+
+    // persist the material and confirm it round-trips through the normal key-loading path.
+    std::fs::write(&generated[0].path, &generated[0].pem_bytes).unwrap();
+    assert!(
+        ServerConfigSource::from_pkcs8_pem_file(
+            config.private_ed25519_identity_key_file.as_ref().unwrap()
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn ssh_generate_config_embeds_both_keys_inline_independently_of_paths() {
+    let config = ServerConfig {
+        expected_username: Some("root".into()),
+        ..Default::default()
+    }
+    .generate_config(&mut rand::rng());
+
+    assert!(config.identity_key.is_some());
+    assert!(config.client_auth_key.is_some());
+    assert!(config.private_ed25519_identity_key_file.is_none());
+    assert_eq!(config.expected_username, Some("root".into()));
 }
 
 /// Client-side handler for tests that only care about server-side restrictions: it accepts

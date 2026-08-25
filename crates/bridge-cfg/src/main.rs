@@ -420,7 +420,9 @@ fn main() -> Result<()> {
     let args = ConfigArgs::parse();
 
     if let Err(e) = args.adapt_config_files() {
-        error!("config adaptation failed: {e}");
+        // `{e:#}` (rather than `{e}`) prints the full anyhow causal chain -- otherwise only the
+        // outermost context message is shown and the actual underlying error is silently dropped.
+        error!("config adaptation failed: {e:#}");
     }
 
     Ok(())
@@ -629,8 +631,8 @@ pub(crate) mod test {
             "1.1.1.1:51822".parse().unwrap()
         );
 
-        // check that a new key was generated
-        assert!(!bridge_cfg.keys.is_empty());
+        // check that a new key was generated for each of the three default transports
+        assert_eq!(bridge_cfg.keys.len(), 3);
 
         // check that the paths to the bridge client params file all point to the expected location.
         assert_eq!(
@@ -642,9 +644,12 @@ pub(crate) mod test {
             config_run.paths.bridge_client_cfg_path
         );
 
-        // check some key fields in the client config
+        // check some key fields in the client config -- the default template now configures
+        // quic_plain, tls_plain, and ssh_plain, so all three should come back sufficient.
+        use nym_bridges::types::Sufficiency;
         let client_params_out =
             parse_persisted_config_json(bridge_client_cfg.serialize().unwrap()).unwrap();
+        assert_eq!(client_params_out.transports.len(), 3);
         client_params_out
             .transports
             .iter()
@@ -657,8 +662,12 @@ pub(crate) mod test {
                     let has_ipv6 = cfg.addresses.iter().any(|addr| addr.is_ipv6());
                     assert!(has_ipv4 || has_ipv6, "should have at least one IP address");
                 }
-                ClientConfig::TlsPlain(_cfg) => todo!(),
-                ClientConfig::SshPlain(_cfg) => todo!(),
+                ClientConfig::TlsPlain(_) | ClientConfig::SshPlain(_) => {
+                    assert!(
+                        transport.is_sufficient(),
+                        "{transport:?} should be sufficient"
+                    );
+                }
             });
 
         Ok(())
@@ -785,6 +794,96 @@ pub(crate) mod test {
                 ClientConfig::TlsPlain(_cfg) => todo!(),
                 ClientConfig::SshPlain(_cfg) => todo!(),
             });
+    }
+
+    /// `TlsPlain`/`SshPlain` transports used to make `BridgeClientConfig::try_from` panic
+    /// (`todo!()`) whenever key generation ran, since only `QuicPlain` was handled. Confirm the
+    /// full `--gen` pipeline now runs cleanly for all three transport kinds, generating
+    /// independent key material for each and producing a sufficient client config for each.
+    #[test]
+    fn adapt_config_generates_keys_for_every_transport_kind() {
+        use nym_bridges::types::Sufficiency;
+
+        init_subscriber(Some(LevelFilter::DEBUG));
+        println!();
+
+        let node_cfg_filepath = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test")
+            .join("config.toml");
+        let node_config = NodeConfig::parse_from_file(&node_cfg_filepath).unwrap();
+
+        let bridge_config = PersistedServerConfig {
+            public_ips: vec!["192.168.0.1".into(), "fe80::1".into()],
+            forward: ForwardConfig {
+                address: "[::1]:5000".parse().unwrap(),
+            },
+            client_params_path: None,
+            transports: vec![
+                TransportServerConfig::QuicPlain(nym_bridges::transport::quic::ServerConfig {
+                    listen: "[::]:443".parse().unwrap(),
+                    ..Default::default()
+                }),
+                TransportServerConfig::TlsPlain(nym_bridges::transport::tls::ServerConfig {
+                    listen: "[::]:444".parse().unwrap(),
+                    ..Default::default()
+                }),
+                TransportServerConfig::SshPlain(nym_bridges::transport::ssh::ServerConfig {
+                    listen: "[::]:445".parse().unwrap(),
+                    ..Default::default()
+                }),
+            ],
+        };
+        let out_str = toml::to_string(&bridge_config).unwrap();
+        let bridge_config =
+            BridgeConfig::parse(out_str).expect("failed to parse bridge configuration");
+
+        let tmp_dir = TempDir::new("bridges").unwrap();
+        let config_run = ConfigRun {
+            opts: RunOptions {
+                generate_keys: true,
+                allow_overwrite: false,
+            },
+            paths: PathInfo {
+                node_cfg_path: node_cfg_filepath,
+                key_dir: tmp_dir.path().to_path_buf(),
+                ..Default::default()
+            },
+            input: ConfigsIn {
+                bridge_cfg: Some(bridge_config),
+                node_cfg: node_config,
+                bridge_client_cfg: None,
+            },
+        };
+
+        let ConfigsOut {
+            bridge_cfg,
+            bridge_client_cfg,
+            ..
+        } = config_run
+            .adapt_configs()
+            .expect("error occurred while adapting configs");
+
+        // all three transports needed generation, and each should get its own key.
+        assert_eq!(bridge_cfg.keys.len(), 3);
+
+        let bridge_config_out: PersistedServerConfig =
+            toml::from_str(&bridge_cfg.serialize()).unwrap();
+        for transport in &bridge_config_out.transports {
+            assert!(
+                transport.is_sufficient(),
+                "generated {transport:?} should be sufficient"
+            );
+        }
+
+        let client_params_out =
+            parse_persisted_config_json(bridge_client_cfg.serialize().unwrap()).unwrap();
+        assert_eq!(client_params_out.transports.len(), 3);
+        for transport in &client_params_out.transports {
+            assert!(
+                transport.is_sufficient(),
+                "derived client config {transport:?} should be sufficient"
+            );
+        }
     }
 
     /// Test playing with and clarifying the ways that you are (or are not) meant to interact with [`DocumentMut`]

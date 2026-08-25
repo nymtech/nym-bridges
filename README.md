@@ -115,9 +115,9 @@ This tool uses ed25519 keys to sign certificates for the TLS handshake. The publ
 
 SSH over TCP piggybacks on a protocol that is extremely common on the public internet and blends in with ordinary administrative traffic. It provides a connection-oriented, encrypted transport secured by a Diffie-Hellman key exchange.
 
-This tool uses the same ed25519 identity key as the other transports as the server's SSH host key. The public (verifying) key is shared to clients as part of the node description and is pinned by the client to verify the server's identity during the key exchange, rather than trusting whatever host key is presented.
+This tool uses its own, independently generated ed25519 identity key (separate from the other transports') as the server's SSH host key. The public (verifying) key is shared to clients as part of the node description and is pinned by the client to verify the server's identity during the key exchange, rather than trusting whatever host key is presented.
 
-Authentication uses SSH's `none` method purely as a shared username check between client and server (configurable, defaulting to `ubuntu`) rather than as a real multi-user credential. Once authenticated, the connection is restricted to a single, opaque data channel used to carry forwarded traffic: shell access, command execution, subsystems, pseudo-terminals, X11 forwarding, and TCP/IP port forwarding are all explicitly rejected, so the transport cannot be used as a general-purpose SSH server.
+Authentication only accepts SSH's `publickey` method, gated on a second, separately generated pre-shared `client_auth_key` identity -- both `none` and `password` are explicitly rejected. The client's presented username (configurable, defaulting to `ubuntu`) is checked as a secondary, shared-secret-like gate rather than a real multi-user credential. Once authenticated, the connection is restricted to a single, opaque data channel used to carry forwarded traffic: shell access, command execution, subsystems, pseudo-terminals, X11 forwarding, and TCP/IP port forwarding are all explicitly rejected, so the transport cannot be used as a general-purpose SSH server.
 
 **[Future]** Shadowsocks | obfs4 | vmess | webrtc | ...
 
