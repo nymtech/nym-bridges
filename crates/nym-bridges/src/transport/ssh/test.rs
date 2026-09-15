@@ -133,7 +133,7 @@ impl russh::client::Handler for AcceptAnyHostKey {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &ssh_key::PublicKey,
+        _server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> std::result::Result<bool, Self::Error> {
         Ok(true)
     }
@@ -521,9 +521,11 @@ async fn server_presents_configured_banner_as_ssh_id() {
 }
 
 /// Confirms the server config carries the session-tuning defaults this transport relies on: a
-/// single auth attempt (enforced separately in `ConnectionHandler::auth_publickey`, since the
-/// installed russh version doesn't itself act on `max_auth_attempts`), and keepalive/inactivity
-/// settings generous enough that a lull in forwarded traffic isn't mistaken for a dead peer.
+/// `max_auth_attempts` cap generous enough to absorb the soft-rejected probes (`none`,
+/// `password`, ...) well-behaved SSH clients send before `publickey` (the actual guessing
+/// protection is enforced separately, and unconditionally, in
+/// `ConnectionHandler::auth_publickey`), and keepalive/inactivity settings generous enough that a
+/// lull in forwarded traffic isn't mistaken for a dead peer.
 #[test]
 fn server_config_uses_hardened_session_defaults() {
     let signing_key = SigningKey::generate(&mut rand::rng());
@@ -539,7 +541,7 @@ fn server_config_uses_hardened_session_defaults() {
     };
 
     let config = server_cfg.build_server_config().unwrap();
-    assert_eq!(config.max_auth_attempts, 1);
+    assert_eq!(config.max_auth_attempts, 4);
     assert_eq!(
         config.methods,
         MethodSet::from(&[MethodKind::PublicKey][..])
