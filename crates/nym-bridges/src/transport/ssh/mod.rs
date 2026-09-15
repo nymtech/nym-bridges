@@ -40,11 +40,19 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// This transport has exactly one real auth method (`publickey`, gated on the pre-shared
-/// `client_auth_key` identity) - there's no legitimate reason a client would need more than one
-/// attempt at it. The installed russh version doesn't itself enforce `max_auth_attempts` (nothing
-/// in the crate actually reads the field back), so `ConnectionHandler::auth_publickey`
-/// additionally disconnects outright on a failed attempt rather than relying on this alone.
-const MAX_AUTH_ATTEMPTS: usize = 1;
+/// `client_auth_key` identity). The actual guessing protection lives entirely in
+/// `ConnectionHandler::auth_publickey`, which disconnects outright on a mismatched user or key -
+/// this cap plays no part in that.
+///
+/// This only bounds how many *soft-rejected* attempts (`none`, `password`,
+/// `keyboard-interactive`, ...) russh will tolerate before hard-disconnecting the connection
+/// itself (`rejection_count >= max_auth_attempts`, checked in russh's
+/// `server_read_encrypted`/`process_packet`), ahead of the real `publickey` attempt ever being
+/// processed. Standard SSH clients commonly probe with `none` (and sometimes `password`) before
+/// falling back to `publickey`, so this needs enough headroom to survive that probing - `1` was
+/// too tight and caused a legitimate `publickey` attempt right after a single probe to be
+/// disconnected before `auth_publickey` even ran.
+const MAX_AUTH_ATTEMPTS: usize = 4;
 
 /// Stream produced by the server side of the transport once a client has opened a channel.
 pub type ServerChannelStream = ChannelStream<russh::server::Msg>;
@@ -278,10 +286,10 @@ impl russh::server::Handler for ConnectionHandler {
     /// Russh only calls this after it has already verified the signature and confirmed key
     /// ownership, so the check here is purely "is this the one key/user we expect".
     ///
-    /// MAX_AUTH_ATTEMPTS is 1, but the installed russh version never actually reads
-    /// `Config::max_auth_attempts` back to enforce it - a soft `Auth::reject()` here would let a
-    /// client keep guessing on the same connection. Ending the session outright on the very
-    /// first failure is what actually makes it one shot.
+    /// A soft `Auth::reject()` here would let a client keep guessing on the same connection
+    /// (`MAX_AUTH_ATTEMPTS` only bounds unrelated soft-rejected probes, see its doc comment).
+    /// Ending the session outright on the very first failure is what actually makes this one
+    /// shot.
     async fn auth_publickey(
         &mut self,
         user: &str,
@@ -575,9 +583,10 @@ impl russh::client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &ssh_key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> std::result::Result<bool, Self::Error> {
-        let Some(ed25519_key) = server_public_key.key_data().ed25519() else {
+        let public_key = server_public_key.public_key();
+        let Some(ed25519_key) = public_key.key_data().ed25519() else {
             return Ok(false);
         };
         Ok(ed25519_key.0 == self.id_pubkey.to_bytes())

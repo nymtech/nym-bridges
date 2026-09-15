@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 use tracing::*;
@@ -160,6 +162,71 @@ impl BridgeConn {
                 })
             }
         }
+    }
+
+    /// Given a set of client parameters this function attempts to race connection establishments to
+    /// the provided bridges and returns a [`BridgeConn`] for the first to succeed. Any connection
+    /// that loses out is canceled. Connections will also obey the provided overall timeout.
+    pub async fn try_connect_parallel(
+        params: impl AsRef<[ClientConfig]>,
+        token: CancellationToken,
+        #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
+        conn_timeout: Option<Duration>,
+    ) -> Result<Self, TransportError> {
+        let params = params.as_ref();
+        if params.is_empty() {
+            return Err(TransportError::config_err(
+                "no bridge configurations provided",
+            ));
+        }
+
+        let start = Instant::now();
+        let connect_timeout = conn_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT);
+        // Child of the caller's token: cancelling it to shed the losing attempts below must not
+        // also cancel `token` out from under the caller, who may still hold their own clone of it.
+        let race_token = token.child_token();
+
+        let mut attempts = FuturesUnordered::new();
+        for candidate in params {
+            attempts.push(Self::try_connect(
+                candidate.clone(),
+                race_token.clone(),
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                &on_socket_open,
+                Some(connect_timeout),
+            ));
+        }
+
+        let mut last_err = None;
+        let winner = loop {
+            match attempts.next().await {
+                Some(Ok(conn)) => break Ok(conn),
+                Some(Err(err)) => {
+                    debug!("parallel connect: one candidate failed: {err}");
+                    last_err = Some(err);
+                }
+                None => {
+                    break Err(last_err.unwrap_or_else(|| {
+                        TransportError::other("no bridge configurations provided")
+                    }));
+                }
+            }
+        };
+
+        // Drop (and thereby cancel) whichever attempts are still racing now that we have a
+        // winner, or have exhausted every candidate.
+        race_token.cancel();
+        drop(attempts);
+
+        if let Ok(ref conn) = winner {
+            info!(
+                "parallel connect: {} won the race in {:?}",
+                conn.endpoint,
+                start.elapsed()
+            );
+        }
+
+        winner
     }
 
     pub fn endpoint(&self) -> SocketAddr {
