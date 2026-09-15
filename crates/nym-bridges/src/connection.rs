@@ -220,8 +220,9 @@ impl BridgeConn {
 
         if let Ok(ref conn) = winner {
             info!(
-                "parallel connect: {} won the race in {:?}",
-                conn.endpoint,
+                "parallel connect: {} ({}) won the race in {:?}",
+                conn.params().transport_name()
+                conn.endpoint(),
                 start.elapsed()
             );
         }

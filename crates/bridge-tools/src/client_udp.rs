@@ -24,6 +24,11 @@ struct Args {
     )]
     /// Path to the configuration for establishing transport connections
     config_path: PathBuf,
+
+    #[clap(short = 'p', long = "parallel")]
+    /// Race connection attempts to all configured transports in parallel and use the first to
+    /// succeed, instead of only ever using the first configured transport
+    parallel: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -64,7 +69,7 @@ async fn main() -> Result<()> {
 
     // Launch the listener(s)
     info!("starting ");
-    let task1_handle = tokio::spawn(listen_socket(cloned_token, config));
+    let task1_handle = tokio::spawn(listen_socket(cloned_token, config, args.parallel));
 
     info!("local forward running, waiting for shutdown");
     // If an interrupt signal is received cancel the original token
@@ -87,7 +92,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-pub async fn listen_socket(token: CancellationToken, opt: ServiceConfig) -> Result<()> {
+pub async fn listen_socket(
+    token: CancellationToken,
+    opt: ServiceConfig,
+    parallel: bool,
+) -> Result<()> {
     let socket = UdpSocket::bind(&opt.ingress_addr).await?;
     let socket = Arc::new(socket);
 
@@ -112,7 +121,7 @@ pub async fn listen_socket(token: CancellationToken, opt: ServiceConfig) -> Resu
                 Ok((_, src)) => {
 
                     debug!("new receive from {src:?} opening transport connection");
-                    handle_session(&opt, src, token, socket).await;
+                    handle_session(&opt, src, token, socket, parallel).await;
                 }
             }
         }
@@ -125,23 +134,18 @@ async fn handle_session(
     src: SocketAddr,
     token: CancellationToken,
     socket: Arc<UdpSocket>,
+    parallel: bool,
 ) {
-    let params = opt.transport_cfg.transports[0].clone();
-    // todo: handle multiple addresses
-    let transport_remote = match &params {
-        ClientConfig::QuicPlain(opts) => opts.addresses[0],
-        ClientConfig::TlsPlain(opts) => opts.addresses[0],
-        ClientConfig::SshPlain(opts) => opts.addresses[0],
-    };
-    let session = Session::new(&src, &transport_remote);
+    let transports = opt.transport_cfg.transports.clone();
+    let remote = SocketAddr::new("0.0.0.0".parse().unwrap(), 0);
+    let session = Session::new(&src, &remote);
 
     let span = info_span!(
-        "connection",
-        remote = %session.transport_remote(),
+        "conn",
         session_id = %session.id()
     );
 
-    if let Err(e) = transport_session(params, socket, token)
+    if let Err(e) = transport_session(transports, parallel, socket, token)
         .instrument(span)
         .await
     {
@@ -150,25 +154,44 @@ async fn handle_session(
 }
 
 async fn transport_session(
-    params: ClientConfig,
+    transports: Vec<ClientConfig>,
+    parallel: bool,
     socket: Arc<UdpSocket>,
     token: CancellationToken,
 ) -> Result<()> {
     let start = Instant::now();
-    let transport_name = params.transport_name();
 
-    let conn = BridgeConn::try_connect(
-        params,
-        token.clone(),
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        |_| {},
-        None,
-    )
-    .await
-    .context("failed to connect to transport conn")?;
+    let conn = if parallel {
+        BridgeConn::try_connect_parallel(
+            transports,
+            token.clone(),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            |_| {},
+            None,
+        )
+        .await
+        .context("failed to connect to transport conn")?
+    } else {
+        let params = transports
+            .into_iter()
+            .next()
+            .context("no transports configured")?;
+
+        BridgeConn::try_connect(
+            params,
+            token.clone(),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            |_| {},
+            None,
+        )
+        .await
+        .context("failed to connect to transport conn")?
+    };
 
     debug!(
-        "{transport_name} transport connected in {:?}",
+        "{} transport ({}) connected in {:?}",
+        conn.params().transport_name(),
+        conn.endpoint(),
         start.elapsed()
     );
 

@@ -25,6 +25,11 @@ struct Args {
     )]
     /// Path to the configuration for establishing transport connections
     config_path: PathBuf,
+
+    #[clap(short = 'p', long = "parallel")]
+    /// Race connection attempts to all configured transports in parallel and use the first to
+    /// succeed, instead of only ever using the first configured transport
+    parallel: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -66,7 +71,7 @@ async fn main() -> Result<()> {
 
     // Launch the listener(s)
     info!("starting ");
-    let task1_handle = tokio::spawn(launch_listener(cloned_token, config));
+    let task1_handle = tokio::spawn(launch_listener(cloned_token, config, args.parallel));
 
     info!("local forward running, waiting for shutdown");
     // If an interrupt signal is received cancel the original token
@@ -86,7 +91,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn launch_listener(token: CancellationToken, opt: ServiceConfig) {
+async fn launch_listener(token: CancellationToken, opt: ServiceConfig, parallel: bool) {
     let listener = tokio::net::TcpListener::bind(&opt.ingress_addr)
         .await
         .expect("failed to launch listener 1");
@@ -96,8 +101,9 @@ async fn launch_listener(token: CancellationToken, opt: ServiceConfig) {
         listener.local_addr().unwrap()
     );
 
-    // For now Ony use the first transport client config to open a connection.
-    let opt = Arc::new(opt.transport_cfg.transports[0].clone());
+    // When `parallel` is set every configured transport is raced in `process` below; otherwise
+    // only the first configured transport is ever used.
+    let transports = Arc::new(opt.transport_cfg.transports);
     loop {
         tokio::select! {
             // Use the provided token to listen to cancellation requests
@@ -111,7 +117,7 @@ async fn launch_listener(token: CancellationToken, opt: ServiceConfig) {
                     Ok((socket, remote)) => {
                         debug!("accepted connection from {remote}");
 
-                        tokio::spawn(process(socket, remote, opt.clone(), token.clone()));
+                        tokio::spawn(process(socket, remote, transports.clone(), parallel, token.clone()));
                     }
                     Err(e) => error!("failed to accept connection: {e}"),
                 }
@@ -123,7 +129,8 @@ async fn launch_listener(token: CancellationToken, opt: ServiceConfig) {
 async fn process<RW>(
     conn: RW,
     ingress_addr: SocketAddr,
-    opt: Arc<ClientConfig>,
+    transports: Arc<Vec<ClientConfig>>,
+    parallel: bool,
     token: CancellationToken,
 ) where
     RW: AsyncWrite + AsyncRead + Unpin + Send,
@@ -131,15 +138,31 @@ async fn process<RW>(
     debug!("opening transport connection");
     let start = Instant::now();
 
-    let transport_conn = match BridgeConn::try_connect(
-        (*opt).clone(),
-        token.clone(),
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        |_| {},
-        None,
-    )
-    .await
-    {
+    let connect_result = if parallel {
+        BridgeConn::try_connect_parallel(
+            transports.as_slice(),
+            token.clone(),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            |_| {},
+            None,
+        )
+        .await
+    } else {
+        let Some(params) = transports.first().cloned() else {
+            error!("no transports configured");
+            return;
+        };
+        BridgeConn::try_connect(
+            params,
+            token.clone(),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            |_| {},
+            None,
+        )
+        .await
+    };
+
+    let transport_conn = match connect_result {
         Ok(conn) => conn,
         Err(e) => {
             error!("failed to connect to transport conn: {}", e);
