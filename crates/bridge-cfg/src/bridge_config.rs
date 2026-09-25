@@ -71,7 +71,8 @@ impl BridgeConfig {
     }
 
     pub fn serialize_to_file(&self, path: PathBuf) -> Result<()> {
-        let mut out_file = std::fs::File::create(path)?;
+        let mut out_file = create_private_file(&path)
+            .with_context(|| format!("failed to open bridge config {path:?} for writing"))?;
         out_file
             .write_all(self.serialize().as_bytes())
             .context("failed to serialize bridge config to file")
@@ -190,10 +191,10 @@ impl BridgeConfig {
 
     pub fn persist_keys(&self, out_dir: &Path) -> Result<()> {
         debug!("persisting keys at: {out_dir:?}");
-        std::fs::create_dir_all(out_dir)
+        create_private_dir_all(out_dir)
             .with_context(|| format!("failed to create key directory {out_dir:?}"))?;
         for (path, key) in keys_out(&self.keys, out_dir) {
-            let mut f = File::create(&path)
+            let mut f = create_private_file(&path)
                 .with_context(|| format!("failed to create key file {path:?}"))?;
             f.write_all(&key)?;
             f.flush()?;
@@ -291,6 +292,33 @@ impl BridgeConfig {
             println!("Δ {:?}", path);
         }
     }
+}
+
+/// Open `path` for writing, truncating any existing contents. A newly created file gets mode 0600
+/// regardless of the process umask; an existing file keeps its owner and mode. Packaging is
+/// responsible for granting the service user access (see `pkg/fix-permissions` in `nym-bridge`).
+fn create_private_file(path: &Path) -> std::io::Result<File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+/// Like [`std::fs::create_dir_all`], but any directories created get mode 0700 regardless of the
+/// process umask. Existing directories are left untouched.
+fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
 }
 
 /// Whether a transport's identity is already usable as-is: an inline key is always sufficient

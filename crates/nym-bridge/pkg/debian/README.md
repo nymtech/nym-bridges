@@ -129,19 +129,27 @@ node_config_path = "/root/.nym/nym-nodes/default-nym-node/config/config.toml"
 
 ### Security: File Permissions
 
-The package automatically sets secure file permissions during installation. For production deployments, consider further restricting access:
+The service runs as the unprivileged `nym` user, which needs to read, but never modify, its config
+and keys. The package enforces this layout:
+
+| Path | Owner | Mode |
+|---|---|---|
+| `/etc/nym/bridges.toml` | `root:nym` | `640` |
+| `/etc/nym/keys/` | `root:nym` | `750` |
+| `/etc/nym/keys/*` | `root:nym` | `640` |
+
+It is applied at install time and again every time the service starts, so files created by
+running `sudo bridge-cfg --gen` manually (which are created root-only, mode `600`) are fixed up
+automatically on the next `systemctl restart nym-bridge`. Key files referenced from outside
+`/etc/nym/keys/` are left untouched and must be made readable by the `nym` group manually. Do not
+tighten these modes further (e.g. `chmod 600`) or the service will be unable to read them.
 
 ```sh
-# Restrict config to owner only (more secure)
-sudo chmod 600 /etc/nym/bridges.toml
-
-# Ensure keys directory is protected
-sudo chmod 700 /etc/nym/keys
-sudo chmod 600 /etc/nym/keys/*
+# Re-apply the permissions without restarting
+sudo /usr/lib/nym-bridge/fix-permissions
 
 # Verify permissions
-ls -la /etc/nym/
-ls -la /etc/nym/keys/
+ls -la /etc/nym/bridges.toml /etc/nym/keys/
 ```
 
 **Important:** Never commit config files or keys to version control or share them publicly. They contain sensitive cryptographic material.

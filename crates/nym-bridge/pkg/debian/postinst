@@ -3,9 +3,9 @@ set -e
 
 BRIDGES_CONF_DIR="/etc/nym/"
 BRIDGES_CONF="${BRIDGES_CONF_DIR}bridges.toml"
-BRIDGES_CONF_PERMS=640
 BRIDGES_HOME="/var/lib/nym/"
 BRIDGES_USER="nym"
+BRIDGES_FIX_PERMISSIONS="/usr/lib/nym-bridge/fix-permissions"
 BRIDGES_FIREWALL_SYNC="/usr/lib/nym-bridge/firewall-sync"
 BRIDGES_FIREWALL_STATE="/var/lib/nym/bridge-firewall.ports"
 
@@ -23,10 +23,9 @@ create_first_time_configuration() {
         # Ensure config directory exists
         mkdir -p "${BRIDGES_CONF_DIR}"
         
-        mkdir -p "${BRIDGES_CONF_DIR}keys"
-        chown ${BRIDGES_USER}:${BRIDGES_USER} "${BRIDGES_CONF_DIR}keys"
-        chmod 700 "${BRIDGES_CONF_DIR}keys"
-        
+        # Created root-only; access for the service group is granted by fix_permissions
+        mkdir -p -m 700 "${BRIDGES_CONF_DIR}keys"
+
         # generate a config file using the default filesystem locations
         echo "Generating bridge configuration..."
         if ! bridge-cfg --gen 2>&1; then
@@ -58,31 +57,29 @@ create_first_time_configuration() {
             return 0
         fi
 
-        # Ensure that the config file has the correct ownership
-        chown ${BRIDGES_USER}:${BRIDGES_USER} ${BRIDGES_CONF}
-        
-        # Ensure that the config file has the correct permissions to prevent unauthorized access
-        # Mode 640 allows read/write for owner (nym), read for group (nym), and no access for others
-        chmod ${BRIDGES_CONF_PERMS} ${BRIDGES_CONF}
-        
         echo ""
         echo "================================================================"
         echo "SUCCESS: Bridge configuration created"
         echo "================================================================"
         echo ""
         echo "SECURITY NOTICE:"
-        echo "Config file created at: ${BRIDGES_CONF}"
-        echo "Permissions set to ${BRIDGES_CONF_PERMS} (owner: ${BRIDGES_USER})"
-        echo "Keys directory created at: ${BRIDGES_CONF_DIR}keys with mode 700"
-        echo ""
-        echo "To further restrict access, consider:"
-        echo "  chmod 600 ${BRIDGES_CONF}"
+        echo "Config file created at: ${BRIDGES_CONF} (root:${BRIDGES_USER}, mode 640)"
+        echo "Keys created in: ${BRIDGES_CONF_DIR}keys (root:${BRIDGES_USER}, mode 750/640)"
+        echo "These permissions are re-applied every time nym-bridge starts."
         echo ""
         echo "To start the bridge:"
         echo "  systemctl enable nym-bridge"
         echo "  systemctl start nym-bridge"
         echo "================================================================"
     fi
+}
+
+fix_permissions() {
+    # Make the config and keys readable, but not writable, by the service user: root:nym with
+    # modes 640 (files) / 750 (keys directory). Also migrates configs from releases that made them
+    # owned by nym, and fixes up files created by running `bridge-cfg` manually as root. The same
+    # step runs every time the service starts.
+    "${BRIDGES_FIX_PERMISSIONS}" "${BRIDGES_CONF}" "${BRIDGES_USER}" || true
 }
 
 remove_legacy_firewall_rules() {
@@ -114,6 +111,7 @@ case "$1" in
 configure)
     create_user
     create_first_time_configuration
+    fix_permissions
     if [ -n "$2" ]; then
         remove_legacy_firewall_rules
     fi

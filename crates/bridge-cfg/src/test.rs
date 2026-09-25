@@ -531,3 +531,34 @@ fn refresh_leaves_unchanged_files_untouched() -> Result<()> {
     assert_eq!(before, mtimes()?);
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn generated_files_are_private_and_rewrites_keep_mode() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    init_subscriber(None);
+    let mode = |p: &Path| -> Result<u32> { Ok(std::fs::metadata(p)?.permissions().mode() & 0o777) };
+
+    let tmp_dir = TempDir::new("bridges")?;
+    let (args, node_cfg_path) = generate_for_refresh(&tmp_dir)?;
+    let bridge_cfg_path = args.bridge_config_path_in.clone().unwrap();
+    let key_dir = tmp_dir.path().join("keys");
+
+    // newly created config and keys are private regardless of umask
+    assert_eq!(mode(&bridge_cfg_path)?, 0o600);
+    assert_eq!(mode(&key_dir)?, 0o700);
+    let keys: Vec<_> = std::fs::read_dir(&key_dir)?.collect::<Result<_, _>>()?;
+    assert!(!keys.is_empty());
+    for key in keys {
+        assert_eq!(mode(&key.path())?, 0o600, "{:?}", key.path());
+    }
+
+    // permissions widened by packaging survive a rewrite
+    std::fs::set_permissions(&bridge_cfg_path, std::fs::Permissions::from_mode(0o640))?;
+    let node_cfg = std::fs::read_to_string(&node_cfg_path)?.replace("1.1.1.1", "5.6.7.8");
+    std::fs::write(&node_cfg_path, node_cfg)?;
+    args.refresh_config_files()?;
+    assert!(std::fs::read_to_string(&bridge_cfg_path)?.contains("5.6.7.8"));
+    assert_eq!(mode(&bridge_cfg_path)?, 0o640);
+    Ok(())
+}

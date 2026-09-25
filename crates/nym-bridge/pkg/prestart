@@ -1,0 +1,25 @@
+#!/bin/sh
+# Pre-start tasks for the nym-bridge service, run as root by the systemd unit (ExecStartPre=+):
+#
+#   1. refresh public IPs / client params from the config (`bridge-cfg --refresh`)
+#   2. normalize config and key file permissions for the service group (fix-permissions)
+#   3. open firewall ports for the configured transports (firewall-sync)
+#
+# usage: prestart [CONFIG]
+#
+# Each step is best effort so the bridge still starts with its existing config if one fails.
+set -u
+
+CONF="${1:-/etc/nym/bridges.toml}"
+LIBDIR="/usr/lib/nym-bridge"
+
+# Grant access to whichever group the unit actually runs as, so a `systemctl edit` override of
+# User=/Group= does not also require changing this script.
+GROUP="$(systemctl show --property=Group --value nym-bridge 2>/dev/null || true)"
+GROUP="${GROUP:-nym}"
+
+/usr/bin/bridge-cfg --refresh -i "${CONF}" || echo "prestart: config refresh failed" >&2
+"${LIBDIR}/fix-permissions" "${CONF}" "${GROUP}" || echo "prestart: fixing permissions failed" >&2
+"${LIBDIR}/firewall-sync" open "${CONF}" || echo "prestart: firewall sync failed" >&2
+
+exit 0
