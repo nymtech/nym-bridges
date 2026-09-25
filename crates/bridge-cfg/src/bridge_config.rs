@@ -14,6 +14,17 @@ include!(concat!(env!("OUT_DIR"), "/bridge_default.rs"));
 
 const CLIENT_PARAMS_PATH_FIELD: &str = "client_params_path";
 const TRANSPORTS_FIELD: &str = "transports";
+const PUBLIC_IPS_SOURCE_FIELD: &str = "public_ips_source";
+const NODE_CONFIG_PATH_FIELD: &str = "node_config_path";
+
+/// Where the bridge `public_ips` (and forward address) should be taken from when refreshed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PublicIpsSource {
+    /// Follow the nym-node config, falling back to detection over the internet.
+    Auto,
+    /// Leave the configured values untouched.
+    Static,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct BridgeConfig {
@@ -60,7 +71,8 @@ impl BridgeConfig {
     }
 
     pub fn serialize_to_file(&self, path: PathBuf) -> Result<()> {
-        let mut out_file = std::fs::File::create(path)?;
+        let mut out_file = create_private_file(&path)
+            .with_context(|| format!("failed to open bridge config {path:?} for writing"))?;
         out_file
             .write_all(self.serialize().as_bytes())
             .context("failed to serialize bridge config to file")
@@ -179,10 +191,10 @@ impl BridgeConfig {
 
     pub fn persist_keys(&self, out_dir: &Path) -> Result<()> {
         debug!("persisting keys at: {out_dir:?}");
-        std::fs::create_dir_all(out_dir)
+        create_private_dir_all(out_dir)
             .with_context(|| format!("failed to create key directory {out_dir:?}"))?;
         for (path, key) in keys_out(&self.keys, out_dir) {
-            let mut f = File::create(&path)
+            let mut f = create_private_file(&path)
                 .with_context(|| format!("failed to create key file {path:?}"))?;
             f.write_all(&key)?;
             f.flush()?;
@@ -229,6 +241,35 @@ impl BridgeConfig {
         }
     }
 
+    /// Configs that predate the `public_ips_source` field are treated as [`PublicIpsSource::Static`]
+    /// so that refreshing never overwrites values an operator may have set by hand.
+    pub fn get_public_ips_source(&self) -> PublicIpsSource {
+        match self
+            .inner
+            .get(PUBLIC_IPS_SOURCE_FIELD)
+            .and_then(|v| v.as_str())
+        {
+            Some("auto") => PublicIpsSource::Auto,
+            Some("static") | None => PublicIpsSource::Static,
+            Some(other) => {
+                warn!("unrecognized {PUBLIC_IPS_SOURCE_FIELD} \"{other}\", treating as \"static\"");
+                PublicIpsSource::Static
+            }
+        }
+    }
+
+    pub fn get_node_config_path(&self) -> Option<PathBuf> {
+        self.inner
+            .get(NODE_CONFIG_PATH_FIELD)
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+    }
+
+    pub fn set_node_config_path(&mut self, path: &Path) {
+        debug!("setting node_config_path for bridge config: {path:?}");
+        self.inner[NODE_CONFIG_PATH_FIELD] = toml_edit::value(path.to_string_lossy().as_ref());
+    }
+
     pub fn print_diff(&self, other: Option<&Self>, path: Option<PathBuf>, key_dir: &Path) {
         let old = other.map(Self::serialize).unwrap_or_default();
         let new = self.serialize();
@@ -251,6 +292,33 @@ impl BridgeConfig {
             println!("Δ {:?}", path);
         }
     }
+}
+
+/// Open `path` for writing, truncating any existing contents. A newly created file gets mode 0600
+/// regardless of the process umask; an existing file keeps its owner and mode. Packaging is
+/// responsible for granting the service user access (see `pkg/fix-permissions` in `nym-bridge`).
+fn create_private_file(path: &Path) -> std::io::Result<File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+/// Like [`std::fs::create_dir_all`], but any directories created get mode 0700 regardless of the
+/// process umask. Existing directories are left untouched.
+fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
 }
 
 /// Whether a transport's identity is already usable as-is: an inline key is always sufficient

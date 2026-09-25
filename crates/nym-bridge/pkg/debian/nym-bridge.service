@@ -1,12 +1,20 @@
 [Unit]
 Description=nym-bridge daemon
-Documentation=man:krill(1)
+Documentation=man:nym-bridge(1)
 
-# Make sure the network is online before this starts
-After=NetworkManager.service systemd-resolved.service
+# Make sure the network is online before this starts (public IP detection may need it)
+Wants=network-online.target
+After=network-online.target NetworkManager.service systemd-resolved.service
 
 [Service]
+# Before starting, refresh the public IPs / client params (see `public_ips_source` in the config),
+# make the config and keys readable by the service group, and open firewall ports matching the
+# configured transports; close the ports after stopping. The `+` prefix runs these as root outside
+# the sandbox below; `-` makes failures non-fatal so a problem in any of these steps never prevents
+# the bridge from running with its existing config.
+ExecStartPre=-+/usr/lib/nym-bridge/prestart /etc/nym/bridges.toml
 ExecStart=/usr/bin/nym-bridge --config /etc/nym/bridges.toml
+ExecStopPost=-+/usr/lib/nym-bridge/firewall-sync close
 Type=exec
 Restart=on-abnormal
 RestartSec=5

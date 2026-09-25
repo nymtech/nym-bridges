@@ -58,6 +58,11 @@ impl NodeConfig {
         Self::parse(config_str).with_context(|| format!("failed to parse node config at {path:?}"))
     }
 
+    /// Whether this was loaded from an actual nym-node config file.
+    pub fn is_from_file(&self) -> bool {
+        matches!(self.inner, NodeConfigInner::File { .. })
+    }
+
     pub fn new_without_node() -> Self {
         Self {
             inner: NodeConfigInner::Default,

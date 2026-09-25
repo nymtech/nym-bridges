@@ -1,0 +1,42 @@
+#!/bin/sh
+# Normalize ownership and modes of the nym-bridge config and keys so the service can read, but not
+# modify, them regardless of who created them or with what umask (e.g. `sudo bridge-cfg --gen`):
+#
+#   CONFIG        root:GROUP 0640
+#   KEYS_DIR      root:GROUP 0750
+#   KEYS_DIR/*    root:GROUP 0640   (regular files only)
+#
+# usage: fix-permissions [CONFIG] [GROUP]
+#
+# KEYS_DIR is the `keys` directory next to CONFIG. Key files referenced from elsewhere (e.g. a
+# nym-node's own identity key) are deliberately left alone. Run as root by the nym-bridge systemd
+# unit (via prestart) and by postinst.
+set -u
+
+CONF="${1:-/etc/nym/bridges.toml}"
+GROUP="${2:-nym}"
+KEYS_DIR="$(dirname "${CONF}")/keys"
+
+log() {
+    echo "fix-permissions: $*" >&2
+}
+
+if ! getent group "${GROUP}" >/dev/null 2>&1; then
+    log "group ${GROUP} does not exist, leaving permissions unchanged"
+    exit 1
+fi
+
+# Symlinks are never followed so an entry placed in a directory previously writable by the service
+# user cannot be used to change the ownership of an arbitrary file.
+if [ -f "${CONF}" ] && [ ! -L "${CONF}" ]; then
+    chown root:"${GROUP}" "${CONF}" && chmod 0640 "${CONF}" || log "failed to update ${CONF}"
+fi
+
+if [ -d "${KEYS_DIR}" ] && [ ! -L "${KEYS_DIR}" ]; then
+    # Lock down the directory first so its contents cannot be swapped while they are updated.
+    chown root:"${GROUP}" "${KEYS_DIR}" && chmod 0750 "${KEYS_DIR}" || log "failed to update ${KEYS_DIR}"
+    find "${KEYS_DIR}" -mindepth 1 -maxdepth 1 -type f \
+        -exec chown root:"${GROUP}" {} + -exec chmod 0640 {} + || log "failed to update keys in ${KEYS_DIR}"
+fi
+
+exit 0

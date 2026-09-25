@@ -43,6 +43,10 @@ additionally gets its own `client_auth_key` (stored inline in `bridges.toml`, no
 file). Remove a transport's `[[transports]]` entry from `bridges.toml` if you don't want it
 running.
 
+The default bridge config is `bridges.template.toml` from the repo root, embedded in the binary at
+build time. The copy installed at `/usr/share/doc/nym-bridge/bridges.template.toml` is for
+reference only; editing it does not change what `--gen` produces.
+
 ## Usage
 
 ```txt
@@ -57,30 +61,43 @@ Options:
       --gen                           If key material is either not specified, or files do not exist at the specified path generate the key material
       --allow-overwrite               DANGER -- Re-generate transport key material, even if it already exists. Overwritten keys will not be recoverable unless saved elsewhere
       --dry-run                       Print the resulting config files wih diff info without persisting the changes
+      --refresh                       Refresh an existing bridge configuration in place, rather than adapting a new one. If `public_ips_source = "auto"` the public IPs and forward address are updated from the nym-node config (falling back to detection over the internet). The client parameters are always regenerated. No keys are generated and the nym-node config is not modified. Files are only written if their contents change
   -h, --help                          Print help (see more with '--help')
 ```
 
-### Security Best Practices
+### Permissions and Management
 
-After generating your bridge configuration, protect sensitive files:
+**File permissions.** `bridge-cfg` creates new config and key files with mode `600` (and a new
+keys directory with `700`), owned by whoever runs it and regardless of umask. Rewriting an existing
+file keeps its owner and mode. `bridge-cfg` does not grant access to any service user; that is
+left to whoever runs the bridge.
 
-```sh
-# Restrict config file permissions (recommended)
-chmod 600 /etc/nym/bridges.toml
+When installed from the Debian package, the `nym-bridge` service runs as the unprivileged `nym`
+user and the package manages this for you. Every time the service starts, it resets these
+permissions:
 
-# Protect keys directory
-chmod 700 /etc/nym/keys
-chmod 600 /etc/nym/keys/*
+| Path | Owner | Mode |
+|---|---|---|
+| `/etc/nym/bridges.toml` | `root:nym` | `640` |
+| `/etc/nym/keys/` | `root:nym` | `750` |
+| `/etc/nym/keys/*` | `root:nym` | `640` |
 
-# If running as a service, ensure files are owned by the service user
-chown nym:nym /etc/nym/bridges.toml
-chown -R nym:nym /etc/nym/keys
-```
+So after running `sudo bridge-cfg ...` by hand, a `systemctl restart nym-bridge` is enough; do not
+`chown` the files to `nym` or tighten them to `600`, or the service will be unable to read them.
+Keys referenced from outside `/etc/nym/keys/` are not touched. If you run `nym-bridge` outside the
+package, give its user read access to the config and keys yourself.
 
-**Security Notes:**
-- Config files contain cryptographic keys and should never be shared
+**On service start**, the packaged unit also:
+
+- runs `bridge-cfg --refresh`, which regenerates the client parameters and, when
+  `public_ips_source = "auto"`, updates `public_ips` and `forward.address` from the nym-node config
+  (see [Refreshing IP Configuration](#refreshing-ip-configuration));
+- opens firewall ports for the transports' `listen` addresses, and closes them again on stop.
+
+**Security notes:**
+- Config files and keys contain cryptographic material and should never be shared or committed
+  to version control
 - Keep backups of keys in a secure location
-- Never commit config files or keys to version control
 - If keys are compromised, regenerate them using `bridge-cfg --gen --allow-overwrite`
 
 ### Examples
@@ -141,31 +158,22 @@ transports that already had valid key material, are left untouched.)
 
 #### Refreshing IP Configuration
 
-If your server's public IP addresses change after the initial configuration (e.g., network reconfiguration, ISP changes), you can refresh the configuration while preserving existing keys:
+`--refresh` updates an existing configuration in place without touching keys or the nym-node
+config. How public IPs are handled depends on `public_ips_source` in `bridges.toml`:
+
+- `"auto"` (default for newly generated configs): `public_ips` and `forward.address` follow the
+  nym-node config at `node_config_path`, falling back to detection over the internet only if the
+  node config has no public IPs.
+- `"static"` (assumed when the field is absent): `public_ips` and `forward.address` are left as-is.
+
+In both cases the client parameters are regenerated from `bridges.toml`, and files are only
+rewritten if their contents change. The packaged service runs this on every start, so after an IP
+change a restart is usually all that is needed:
 
 ```sh
-# Re-detect public IPs and update existing config (preserves keys)
-bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml
+# Preview changes
+sudo bridge-cfg --refresh -i /etc/nym/bridges.toml --dry-run
 
-# Preview changes with dry-run first
-bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml --dry-run
-
-# After updating, restart the bridge service
+# Apply them (the packaged service also does this on start)
 sudo systemctl restart nym-bridge
 ```
-
-This is useful when:
-- Your server's public IP changes
-- You add or remove IPv6 connectivity
-- You migrate to a different network environment
-- You need to update the configuration without regenerating keys
-
-## Future Work
-
-In the future this tool is planned as a means of generating and validating configuration for the
-multiple bridge types that we intend to support and ensuring compatibility with a running `nym-node`. 
-
-
-Currently the default Bridges config is taken from the repo root and included at compile time. In the
-future this may change such that a default config is places in a default location in the filesystem
-rather than using a build directive to add it to the binary. 

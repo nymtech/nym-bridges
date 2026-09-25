@@ -77,36 +77,79 @@ sudo bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml
 sudo systemctl restart nym-bridge
 ```
 
-### Refreshing IP Configuration
+### Firewall Rules
 
-If your server's public IP addresses change (e.g., after network reconfiguration), you can refresh the configuration:
+Firewall ports are derived from the `listen` addresses of the transports in `/etc/nym/bridges.toml`
+(`quic_plain` → UDP, `tls_plain` / `ssh_plain` → TCP). They are opened each time the service starts
+and closed when it stops, so after changing a listen port a `systemctl restart nym-bridge` is all
+that is required; rules for ports that are no longer configured are removed automatically.
+
+Supported firewall managers are ufw (via a `nym-bridge` application profile), firewalld and
+iptables. With nftables, the required rules are printed to the service log for manual setup.
 
 ```sh
-# Re-detect public IPs and update config (preserves existing keys)
-sudo bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml
+# Show the ports the current config listens on
+sudo nym-bridge --config /etc/nym/bridges.toml --print-ports
 
-# Verify the changes before restarting
-sudo cat /etc/nym/bridges.toml | grep public_ips
+# Apply / remove the rules manually
+sudo /usr/lib/nym-bridge/firewall-sync open
+sudo /usr/lib/nym-bridge/firewall-sync close
+```
 
-# Restart the service
+### Refreshing IP Configuration
+
+Every time the service starts it runs `bridge-cfg --refresh`, which regenerates
+`client_bridge_params.json` from `/etc/nym/bridges.toml`. How the public IPs are handled depends
+on `public_ips_source` in the bridge config:
+
+- `"auto"` (default for newly generated configs): `public_ips` and `forward.address` are taken
+  from the nym-node config (`host.public_ips`, located via `node_config_path`). Detection over the
+  internet is only used if the node config has no public IPs.
+- `"static"` (assumed for configs without the field): `public_ips` and `forward.address` are never
+  modified. Use this if you set the IPs by hand.
+
+Files are only rewritten when their contents change. So after an IP change (update the nym-node
+config first, if it doesn't pick the change up itself), a restart is all that is needed:
+
+```sh
+# Preview what a refresh would change
+sudo bridge-cfg --refresh -i /etc/nym/bridges.toml --dry-run
+
+# Apply it (the service also does this on every start)
 sudo systemctl restart nym-bridge
+```
+
+To switch an existing config to follow the nym-node config, add the following to the top level of
+`/etc/nym/bridges.toml` (above `[forward]`):
+
+```toml
+public_ips_source = "auto"
+node_config_path = "/root/.nym/nym-nodes/default-nym-node/config/config.toml"
 ```
 
 ### Security: File Permissions
 
-The package automatically sets secure file permissions during installation. For production deployments, consider further restricting access:
+The service runs as the unprivileged `nym` user, which needs to read, but never modify, its config
+and keys. The package enforces this layout:
+
+| Path | Owner | Mode |
+|---|---|---|
+| `/etc/nym/bridges.toml` | `root:nym` | `640` |
+| `/etc/nym/keys/` | `root:nym` | `750` |
+| `/etc/nym/keys/*` | `root:nym` | `640` |
+
+It is applied at install time and again every time the service starts, so files created by
+running `sudo bridge-cfg --gen` manually (which are created root-only, mode `600`) are fixed up
+automatically on the next `systemctl restart nym-bridge`. Key files referenced from outside
+`/etc/nym/keys/` are left untouched and must be made readable by the `nym` group manually. Do not
+tighten these modes further (e.g. `chmod 600`) or the service will be unable to read them.
 
 ```sh
-# Restrict config to owner only (more secure)
-sudo chmod 600 /etc/nym/bridges.toml
-
-# Ensure keys directory is protected
-sudo chmod 700 /etc/nym/keys
-sudo chmod 600 /etc/nym/keys/*
+# Re-apply the permissions without restarting
+sudo /usr/lib/nym-bridge/fix-permissions
 
 # Verify permissions
-ls -la /etc/nym/
-ls -la /etc/nym/keys/
+ls -la /etc/nym/bridges.toml /etc/nym/keys/
 ```
 
 **Important:** Never commit config files or keys to version control or share them publicly. They contain sensitive cryptographic material.

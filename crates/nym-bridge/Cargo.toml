@@ -82,6 +82,21 @@ assets = [
         "644",
     ],
     [
+        "pkg/prestart",
+        "/usr/lib/nym-bridge/prestart",
+        "755",
+    ],
+    [
+        "pkg/fix-permissions",
+        "/usr/lib/nym-bridge/fix-permissions",
+        "755",
+    ],
+    [
+        "pkg/firewall-sync",
+        "/usr/lib/nym-bridge/firewall-sync",
+        "755",
+    ],
+    [
         "pkg/doc/nym-bridge.1",
         "/usr/share/man/man1/nym-bridge.1",
         "644",

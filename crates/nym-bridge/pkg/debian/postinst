@@ -3,9 +3,11 @@ set -e
 
 BRIDGES_CONF_DIR="/etc/nym/"
 BRIDGES_CONF="${BRIDGES_CONF_DIR}bridges.toml"
-BRIDGES_CONF_PERMS=640
 BRIDGES_HOME="/var/lib/nym/"
 BRIDGES_USER="nym"
+BRIDGES_FIX_PERMISSIONS="/usr/lib/nym-bridge/fix-permissions"
+BRIDGES_FIREWALL_SYNC="/usr/lib/nym-bridge/firewall-sync"
+BRIDGES_FIREWALL_STATE="/var/lib/nym/bridge-firewall.ports"
 
 create_user() {
     if id ${BRIDGES_USER} > /dev/null 2>&1; then return; fi
@@ -21,10 +23,9 @@ create_first_time_configuration() {
         # Ensure config directory exists
         mkdir -p "${BRIDGES_CONF_DIR}"
         
-        mkdir -p "${BRIDGES_CONF_DIR}keys"
-        chown ${BRIDGES_USER}:${BRIDGES_USER} "${BRIDGES_CONF_DIR}keys"
-        chmod 700 "${BRIDGES_CONF_DIR}keys"
-        
+        # Created root-only; access for the service group is granted by fix_permissions
+        mkdir -p -m 700 "${BRIDGES_CONF_DIR}keys"
+
         # generate a config file using the default filesystem locations
         echo "Generating bridge configuration..."
         if ! bridge-cfg --gen 2>&1; then
@@ -56,25 +57,15 @@ create_first_time_configuration() {
             return 0
         fi
 
-        # Ensure that the config file has the correct ownership
-        chown ${BRIDGES_USER}:${BRIDGES_USER} ${BRIDGES_CONF}
-        
-        # Ensure that the config file has the correct permissions to prevent unauthorized access
-        # Mode 640 allows read/write for owner (nym), read for group (nym), and no access for others
-        chmod ${BRIDGES_CONF_PERMS} ${BRIDGES_CONF}
-        
         echo ""
         echo "================================================================"
         echo "SUCCESS: Bridge configuration created"
         echo "================================================================"
         echo ""
         echo "SECURITY NOTICE:"
-        echo "Config file created at: ${BRIDGES_CONF}"
-        echo "Permissions set to ${BRIDGES_CONF_PERMS} (owner: ${BRIDGES_USER})"
-        echo "Keys directory created at: ${BRIDGES_CONF_DIR}keys with mode 700"
-        echo ""
-        echo "To further restrict access, consider:"
-        echo "  chmod 600 ${BRIDGES_CONF}"
+        echo "Config file created at: ${BRIDGES_CONF} (root:${BRIDGES_USER}, mode 640)"
+        echo "Keys created in: ${BRIDGES_CONF_DIR}keys (root:${BRIDGES_USER}, mode 750/640)"
+        echo "These permissions are re-applied every time nym-bridge starts."
         echo ""
         echo "To start the bridge:"
         echo "  systemctl enable nym-bridge"
@@ -83,32 +74,36 @@ create_first_time_configuration() {
     fi
 }
 
-configure_firewall() {
-    # Open port 4443 for nym-bridge QUIC traffic
-    # Try multiple firewall managers for broader compatibility
-    
+fix_permissions() {
+    # Make the config and keys readable, but not writable, by the service user: root:nym with
+    # modes 640 (files) / 750 (keys directory). Also migrates configs from releases that made them
+    # owned by nym, and fixes up files created by running `bridge-cfg` manually as root. The same
+    # step runs every time the service starts.
+    "${BRIDGES_FIX_PERMISSIONS}" "${BRIDGES_CONF}" "${BRIDGES_USER}" || true
+}
+
+remove_legacy_firewall_rules() {
+    # Releases prior to firewall-sync unconditionally opened 4443/udp from this script. If
+    # firewall-sync has never run (no state file) remove that rule so that it is not left open
+    # after the configured ports change.
+    if [ -f "${BRIDGES_FIREWALL_STATE}" ]; then return; fi
+
     if command -v ufw >/dev/null 2>&1 && ufw status >/dev/null 2>&1; then
-        echo "Configuring firewall with ufw..."
-        ufw allow 4443/udp comment "nym-bridge QUIC transport" 2>/dev/null || true
+        ufw delete allow 4443/udp >/dev/null 2>&1 || true
     elif command -v firewall-cmd >/dev/null 2>&1; then
-        echo "Configuring firewall with firewalld..."
-        firewall-cmd --permanent --add-port=4443/udp 2>/dev/null || true
-        firewall-cmd --reload 2>/dev/null || true
-    elif command -v nft >/dev/null 2>&1; then
-        echo "Detected nftables - please manually configure port 4443/udp"
-        echo "  Example: nft add rule inet filter input udp dport 4443 accept"
+        firewall-cmd --permanent --remove-port=4443/udp >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
     elif command -v iptables >/dev/null 2>&1; then
-        echo "Configuring firewall with iptables..."
-        iptables -I INPUT -p udp --dport 4443 -j ACCEPT 2>/dev/null || true
-        # Try to save iptables rules if iptables-persistent is available
-        if command -v netfilter-persistent >/dev/null 2>&1; then
-            netfilter-persistent save 2>/dev/null || true
-        elif command -v iptables-save >/dev/null 2>&1; then
-            iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-        fi
-    else
-        echo "No supported firewall manager detected (ufw, firewalld, nftables, iptables)"
-        echo "Please manually open UDP port 4443 for nym-bridge QUIC transport"
+        iptables -D INPUT -p udp --dport 4443 -j ACCEPT 2>/dev/null || true
+    fi
+}
+
+configure_firewall() {
+    # Firewall rules follow the listen ports in the bridge config. They are (re)applied every time
+    # the nym-bridge service starts, so edits to the config take effect on `systemctl restart
+    # nym-bridge`. Apply them now as well so the ports are open as soon as the package is installed.
+    if [ -f "${BRIDGES_CONF}" ]; then
+        "${BRIDGES_FIREWALL_SYNC}" open "${BRIDGES_CONF}" || true
     fi
 }
 
@@ -116,6 +111,10 @@ case "$1" in
 configure)
     create_user
     create_first_time_configuration
+    fix_permissions
+    if [ -n "$2" ]; then
+        remove_legacy_firewall_rules
+    fi
     configure_firewall
     ;;
 esac

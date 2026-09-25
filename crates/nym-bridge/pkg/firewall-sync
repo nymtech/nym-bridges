@@ -1,0 +1,201 @@
+#!/bin/sh
+# Keep host firewall rules in sync with the ports that nym-bridge is configured to listen on.
+#
+# usage: firewall-sync open|close [CONFIG]
+#
+#   open   read the listen ports from CONFIG (via `nym-bridge --print-ports`), remove rules for
+#          ports that were previously opened but are no longer configured, and open the current
+#          set of ports.
+#   close  remove every rule previously opened by this script.
+#
+# The set of applied ports is recorded in ${STATE} so that stale rules can be cleaned up when the
+# configuration changes. This script is run as root by the nym-bridge systemd unit (ExecStartPre /
+# ExecStopPost) and by the package maintainer scripts. Failures are reported but never fatal.
+set -u
+
+CONF="${2:-/etc/nym/bridges.toml}"
+STATE="/var/lib/nym/bridge-firewall.ports"
+NYM_BRIDGE="/usr/bin/nym-bridge"
+RULE_COMMENT="nym-bridge"
+UFW_APP="nym-bridge"
+UFW_APP_FILE="/etc/ufw/applications.d/nym-bridge"
+
+log() {
+    echo "firewall-sync: $*" >&2
+}
+
+detect_backend() {
+    if command -v ufw >/dev/null 2>&1 && ufw status >/dev/null 2>&1; then
+        echo ufw
+    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        echo firewalld
+    elif command -v nft >/dev/null 2>&1; then
+        echo nft
+    elif command -v iptables >/dev/null 2>&1; then
+        echo iptables
+    else
+        echo none
+    fi
+}
+
+# --- ufw ---------------------------------------------------------------------------------------
+# ufw is managed through an application profile so that a port change only requires rewriting the
+# profile; `ufw app update` then rewrites the associated rules in place.
+
+ufw_apply() {
+    ports="$1"
+    if [ -z "${ports}" ]; then
+        ufw_close
+        return
+    fi
+    mkdir -p "$(dirname "${UFW_APP_FILE}")"
+    cat > "${UFW_APP_FILE}" <<EOF
+[${UFW_APP}]
+title=Nym Bridge
+description=Nym bridge transports (managed by /usr/lib/nym-bridge/firewall-sync)
+ports=$(echo "${ports}" | paste -sd '|' -)
+EOF
+    ufw app update "${UFW_APP}" >/dev/null 2>&1 || true
+    ufw allow "${UFW_APP}" >/dev/null 2>&1 || log "ufw: failed to allow ${UFW_APP}"
+}
+
+ufw_close() {
+    if [ -f "${UFW_APP_FILE}" ]; then
+        ufw delete allow "${UFW_APP}" >/dev/null 2>&1 || true
+        rm -f "${UFW_APP_FILE}"
+    fi
+}
+
+# --- firewalld ---------------------------------------------------------------------------------
+# Rules are applied to both the runtime and permanent configuration so no reload is required.
+
+firewalld_add() {
+    firewall-cmd --add-port="$1" >/dev/null 2>&1 || log "firewalld: failed to add $1"
+    firewall-cmd --permanent --add-port="$1" >/dev/null 2>&1 || true
+}
+
+firewalld_remove() {
+    firewall-cmd --remove-port="$1" >/dev/null 2>&1 || true
+    firewall-cmd --permanent --remove-port="$1" >/dev/null 2>&1 || true
+}
+
+# --- iptables ----------------------------------------------------------------------------------
+# Rules are tagged with a comment so they can be identified, and checked before insertion so that
+# repeated runs do not stack duplicate rules.
+
+iptables_rule() {
+    # $1: -C|-I|-D  $2: port  $3: protocol
+    for cmd in iptables ip6tables; do
+        command -v "${cmd}" >/dev/null 2>&1 || continue
+        if [ "$1" = "-I" ]; then
+            "${cmd}" -C INPUT -p "$3" --dport "$2" -m comment --comment "${RULE_COMMENT}" -j ACCEPT \
+                2>/dev/null && continue
+        fi
+        "${cmd}" "$1" INPUT -p "$3" --dport "$2" -m comment --comment "${RULE_COMMENT}" -j ACCEPT \
+            2>/dev/null || { [ "$1" = "-I" ] && log "${cmd}: failed to open $2/$3"; }
+    done
+}
+
+iptables_persist() {
+    if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save >/dev/null 2>&1 || true
+    elif [ -d /etc/iptables ]; then
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        if command -v ip6tables-save >/dev/null 2>&1; then
+            ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+        fi
+    fi
+}
+
+# --- generic dispatch --------------------------------------------------------------------------
+
+add_port() {
+    case "${BACKEND}" in
+    firewalld) firewalld_add "$1" ;;
+    iptables) iptables_rule -I "${1%/*}" "${1#*/}" ;;
+    esac
+}
+
+remove_port() {
+    case "${BACKEND}" in
+    firewalld) firewalld_remove "$1" ;;
+    iptables) iptables_rule -D "${1%/*}" "${1#*/}" ;;
+    esac
+}
+
+print_manual_instructions() {
+    ports="$1"
+    [ -n "${ports}" ] || return 0
+    case "${BACKEND}" in
+    nft)
+        log "detected nftables - please manually allow the nym-bridge ports:"
+        for p in ${ports}; do
+            log "  nft add rule inet filter input ${p#*/} dport ${p%/*} accept"
+        done
+        ;;
+    none)
+        log "no supported firewall manager detected (ufw, firewalld, nftables, iptables)"
+        log "please manually allow the nym-bridge ports: $(echo ${ports})"
+        ;;
+    esac
+}
+
+sync_open() {
+    if ! new_ports="$("${NYM_BRIDGE}" --config "${CONF}" --print-ports 2>/dev/null)"; then
+        log "unable to read listen ports from ${CONF}; leaving firewall rules unchanged"
+        return 0
+    fi
+    old_ports="$(cat "${STATE}" 2>/dev/null || true)"
+
+    case "${BACKEND}" in
+    ufw)
+        ufw_apply "${new_ports}"
+        ;;
+    firewalld | iptables)
+        for p in ${old_ports}; do
+            echo "${new_ports}" | grep -qxF "${p}" || remove_port "${p}"
+        done
+        for p in ${new_ports}; do
+            add_port "${p}"
+        done
+        [ "${BACKEND}" = iptables ] && iptables_persist
+        ;;
+    *)
+        print_manual_instructions "${new_ports}"
+        ;;
+    esac
+
+    mkdir -p "$(dirname "${STATE}")"
+    echo "${new_ports}" > "${STATE}"
+}
+
+sync_close() {
+    old_ports="$(cat "${STATE}" 2>/dev/null || true)"
+
+    case "${BACKEND}" in
+    ufw)
+        ufw_close
+        ;;
+    firewalld | iptables)
+        for p in ${old_ports}; do
+            remove_port "${p}"
+        done
+        [ "${BACKEND}" = iptables ] && iptables_persist
+        ;;
+    esac
+
+    rm -f "${STATE}"
+}
+
+BACKEND="$(detect_backend)"
+
+case "${1:-}" in
+open) sync_open ;;
+close) sync_close ;;
+*)
+    echo "usage: $0 open|close [CONFIG]" >&2
+    exit 2
+    ;;
+esac
+
+exit 0
