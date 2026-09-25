@@ -82,3 +82,44 @@ plus a `.deb` package and uploads them as a GitHub Actions artifact (30-day rete
 triggered by tags — only manually (`workflow_dispatch`) or nightly on a schedule — so if binaries
 are wanted for a given release, trigger it manually against the release tag/commit and attach the
 artifacts to a GitHub Release by hand.
+
+GitHub attaches `Source code (zip)` / `Source code (tar.gz)` archives of the tag to every release
+automatically; only the binaries and `.deb` need to be uploaded.
+
+### Building them by hand
+
+Build from a checkout of the release tag, not `main` — the `.deb` version comes from
+`workspace.package.version`, so building after the step 7 bump produces e.g. a `0.2.3~rc.1`
+package.
+
+```sh
+git checkout vX.Y.Z
+cargo build --release --locked -p nym-bridge -p bridge-cfg
+cargo deb -p nym-bridge --no-build
+```
+
+The output is `target/release/{nym-bridge,bridge-cfg}` and
+`target/debian/nym-bridge_X.Y.Z-1_amd64.deb`.
+
+- **`--locked`** builds exactly what `Cargo.lock` pins, and fails rather than silently resolving
+  different dependency versions than were tested.
+- **Build `bridge-cfg` explicitly, then `cargo deb --no-build`.** `cargo deb` only builds the
+  `nym-bridge` package; `bridge-cfg` is a separate crate that the deb metadata in
+  `crates/nym-bridge/Cargo.toml` picks up as an asset from `target/release/bridge-cfg`. Without the
+  explicit build that file is either missing (packaging fails) or stale from an earlier build
+  (packaging silently ships an old `bridge-cfg`).
+- **glibc floor.** The binaries link dynamically against glibc, and cargo-deb records the
+  requirement (e.g. `Depends: libc6 (>= 2.35)`). The build host's glibc sets the oldest distro the
+  release runs on — CI's `ubuntu-22.04` means glibc 2.35, which excludes Debian 11 and Ubuntu 20.04.
+  Build on an older image, or use `--target x86_64-unknown-linux-musl` for a static binary, if
+  those need to be supported.
+- **Stripping.** cargo-deb strips the binaries it packages, but `target/release/*` still carries
+  symbols. Run `strip` on them before attaching the raw binaries to a release.
+
+Before uploading, sanity-check the package:
+
+```sh
+dpkg-deb -I target/debian/nym-bridge_*.deb   # version, Depends, maintainer scripts
+dpkg-deb -c target/debian/nym-bridge_*.deb   # both binaries + pkg/ helpers present
+lintian target/debian/nym-bridge_*.deb       # optional; apt install lintian
+```
