@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add config refresh, service management changes, and port usage printing (https://github.com/nymtech/nym-bridges/pull/82)
 - Ability to race transports when establishing BridgeConn connection (https://github.com/nymtech/nym-bridges/pull/77)
 
 
