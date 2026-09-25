@@ -8,10 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-25
+
+
 ### Added
 
 - Add config refresh, service management changes, and port usage printing (https://github.com/nymtech/nym-bridges/pull/82)
+- Add Testing for parallel connect in test-env (https://github.com/nymtech/nym-bridges/pull/78)
 - Ability to race transports when establishing BridgeConn connection (https://github.com/nymtech/nym-bridges/pull/77)
+
+### Changed
+
+- Bumped dependency version patches
 
 
 ## [0.2.1] - 2026-08-25
