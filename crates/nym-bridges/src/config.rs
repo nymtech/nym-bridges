@@ -46,6 +46,25 @@ impl From<ssh::ServerConfig> for TransportServerConfig {
     }
 }
 
+impl TransportServerConfig {
+    /// Socket address the transport listener binds to.
+    pub fn listen_addr(&self) -> SocketAddr {
+        match self {
+            TransportServerConfig::QuicPlain(cfg) => cfg.listen,
+            TransportServerConfig::TlsPlain(cfg) => cfg.listen,
+            TransportServerConfig::SshPlain(cfg) => cfg.listen,
+        }
+    }
+
+    /// Network protocol used by the transport listener ("udp" or "tcp").
+    pub fn listen_protocol(&self) -> &'static str {
+        match self {
+            TransportServerConfig::QuicPlain(_) => "udp",
+            TransportServerConfig::TlsPlain(_) | TransportServerConfig::SshPlain(_) => "tcp",
+        }
+    }
+}
+
 impl crate::types::Sufficiency for TransportServerConfig {
     fn is_sufficient(&self) -> bool {
         match self {
@@ -76,6 +95,19 @@ pub struct PersistedServerConfig {
 
 #[allow(unused)]
 impl PersistedServerConfig {
+    /// Deduplicated set of `<port>/<protocol>` entries (e.g. `4443/udp`) that transports in this
+    /// config listen on, sorted for stable output.
+    pub fn listen_ports(&self) -> Vec<String> {
+        let mut ports: Vec<String> = self
+            .transports
+            .iter()
+            .map(|t| format!("{}/{}", t.listen_addr().port(), t.listen_protocol()))
+            .collect();
+        ports.sort();
+        ports.dedup();
+        ports
+    }
+
     pub fn parse(config_str: impl AsRef<str>) -> Result<Self> {
         toml::from_str(config_str.as_ref()).context("failed to parse config")
     }
@@ -236,6 +268,45 @@ identity_key = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk="
 
         assert_eq!(cfg, parsed_cfg);
 
+        Ok(())
+    }
+
+    #[test]
+    fn listen_ports() -> Result<()> {
+        let example_server_config = r#"
+public_ips = []
+
+[forward]
+address = "[::1]:50001"
+
+[[transports]]
+transport_type = "quic_plain"
+
+[transports.args]
+stateless_retry = false
+listen = "[::]:4443"
+
+[[transports]]
+transport_type = "tls_plain"
+
+[transports.args]
+listen = "[::]:4443"
+
+[[transports]]
+transport_type = "tls_plain"
+
+[transports.args]
+listen = "0.0.0.0:4443"
+
+[[transports]]
+transport_type = "ssh_plain"
+
+[transports.args]
+listen = "[::]:4422"
+"#;
+
+        let cfg = PersistedServerConfig::parse(example_server_config)?;
+        assert_eq!(cfg.listen_ports(), vec!["4422/tcp", "4443/tcp", "4443/udp"]);
         Ok(())
     }
 

@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+BRIDGES_FIREWALL_SYNC="/usr/lib/nym-bridge/firewall-sync"
+
+case "$1" in
+remove)
+    # Close any firewall ports opened for nym-bridge. This must happen here rather than in postrm
+    # as firewall-sync is no longer present once the package files have been removed.
+    if [ -x "${BRIDGES_FIREWALL_SYNC}" ]; then
+        "${BRIDGES_FIREWALL_SYNC}" close || true
+    fi
+    ;;
+esac
+
+#DEBHELPER#

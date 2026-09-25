@@ -27,6 +27,11 @@ struct Args {
     /// Specify the path to the config file to load. If no file path is provided, a default path
     /// will be assumed.
     config_path: PathBuf,
+
+    #[clap(long)]
+    /// Print the `<port>/<protocol>` pairs (one per line) that the configured transports listen on,
+    /// then exit without starting any listeners. Used by packaging to manage firewall rules.
+    print_ports: bool,
 }
 
 static PRETTY_BUILD_INFORMATION: OnceLock<String> = OnceLock::new();
@@ -37,15 +42,23 @@ fn pretty_build_info_static() -> &'static str {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+    let config = PersistedServerConfig::parse_file(&args.config_path)?;
+
+    // handled before logging is initialized so that stdout contains only the port list
+    if args.print_ports {
+        for port in config.listen_ports() {
+            println!("{port}");
+        }
+        return Ok(());
+    }
+
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
-
-    let args = Args::parse();
-    let config = PersistedServerConfig::parse_file(&args.config_path)?;
 
     // Setup for graceful shutdown
     let token = CancellationToken::new();

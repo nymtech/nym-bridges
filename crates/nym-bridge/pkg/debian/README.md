@@ -77,6 +77,25 @@ sudo bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml
 sudo systemctl restart nym-bridge
 ```
 
+### Firewall Rules
+
+Firewall ports are derived from the `listen` addresses of the transports in `/etc/nym/bridges.toml`
+(`quic_plain` → UDP, `tls_plain` / `ssh_plain` → TCP). They are opened each time the service starts
+and closed when it stops, so after changing a listen port a `systemctl restart nym-bridge` is all
+that is required; rules for ports that are no longer configured are removed automatically.
+
+Supported firewall managers are ufw (via a `nym-bridge` application profile), firewalld and
+iptables. With nftables, the required rules are printed to the service log for manual setup.
+
+```sh
+# Show the ports the current config listens on
+sudo nym-bridge --config /etc/nym/bridges.toml --print-ports
+
+# Apply / remove the rules manually
+sudo /usr/lib/nym-bridge/firewall-sync open
+sudo /usr/lib/nym-bridge/firewall-sync close
+```
+
 ### Refreshing IP Configuration
 
 If your server's public IP addresses change (e.g., after network reconfiguration), you can refresh the configuration:

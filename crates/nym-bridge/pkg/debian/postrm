@@ -3,18 +3,8 @@ set -e
 
 BRIDGES_CONF="/etc/nym/bridges.toml"
 
-remove_firewall_rule() {
-    # Remove the nym-bridge firewall rule
-    if command -v ufw >/dev/null 2>&1; then
-        ufw delete allow 4443/udp 2>/dev/null || true
-    fi
-}
-
 case "$1" in
 remove|purge)
-    # Remove firewall rule on both remove and purge
-    remove_firewall_rule
-    
     # Only remove config files on purge
     if [ "$1" = "purge" ]; then
         # Per https://www.debian.org/doc/debian-policy/ch-files.html#behavior
@@ -31,6 +21,8 @@ remove|purge)
         if [ -d "/etc/nym/keys" ]; then
             rm -rf "/etc/nym/keys"
         fi
+        # Remove firewall-sync state (rules themselves are removed in prerm)
+        rm -f "/var/lib/nym/bridge-firewall.ports"
     fi
     ;;
 esac
