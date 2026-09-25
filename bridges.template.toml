@@ -10,6 +10,19 @@ client_params_path = "/etc/nym/default-nym-node/client_bridge_params.json"
 # These will be automatically populated from your nym-node config or detected from the internet
 public_ips = []
 
+# Where `public_ips` and `forward.address` come from when refreshed by `bridge-cfg --refresh`
+# (run by the nym-bridge service on every start):
+#   "auto"   - use `host.public_ips` from the nym-node config, falling back to detection over the
+#              internet only if the node config has none.
+#   "static" - never modify `public_ips` or `forward.address`; client parameters are still
+#              regenerated from this file.
+# Configs without this field are treated as "static".
+public_ips_source = "auto"
+
+# Path to the nym-node config used as the source for `public_ips` and `forward.address`.
+# Populated by `bridge-cfg`.
+# node_config_path = "/root/.nym/nym-nodes/default-nym-node/config/config.toml"
+
 [forward]
 # Target address where client traffic will be forwarded.
 #

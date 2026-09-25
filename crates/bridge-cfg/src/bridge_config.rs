@@ -14,6 +14,17 @@ include!(concat!(env!("OUT_DIR"), "/bridge_default.rs"));
 
 const CLIENT_PARAMS_PATH_FIELD: &str = "client_params_path";
 const TRANSPORTS_FIELD: &str = "transports";
+const PUBLIC_IPS_SOURCE_FIELD: &str = "public_ips_source";
+const NODE_CONFIG_PATH_FIELD: &str = "node_config_path";
+
+/// Where the bridge `public_ips` (and forward address) should be taken from when refreshed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PublicIpsSource {
+    /// Follow the nym-node config, falling back to detection over the internet.
+    Auto,
+    /// Leave the configured values untouched.
+    Static,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct BridgeConfig {
@@ -227,6 +238,35 @@ impl BridgeConfig {
         } else {
             Vec::new()
         }
+    }
+
+    /// Configs that predate the `public_ips_source` field are treated as [`PublicIpsSource::Static`]
+    /// so that refreshing never overwrites values an operator may have set by hand.
+    pub fn get_public_ips_source(&self) -> PublicIpsSource {
+        match self
+            .inner
+            .get(PUBLIC_IPS_SOURCE_FIELD)
+            .and_then(|v| v.as_str())
+        {
+            Some("auto") => PublicIpsSource::Auto,
+            Some("static") | None => PublicIpsSource::Static,
+            Some(other) => {
+                warn!("unrecognized {PUBLIC_IPS_SOURCE_FIELD} \"{other}\", treating as \"static\"");
+                PublicIpsSource::Static
+            }
+        }
+    }
+
+    pub fn get_node_config_path(&self) -> Option<PathBuf> {
+        self.inner
+            .get(NODE_CONFIG_PATH_FIELD)
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+    }
+
+    pub fn set_node_config_path(&mut self, path: &Path) {
+        debug!("setting node_config_path for bridge config: {path:?}");
+        self.inner[NODE_CONFIG_PATH_FIELD] = toml_edit::value(path.to_string_lossy().as_ref());
     }
 
     pub fn print_diff(&self, other: Option<&Self>, path: Option<PathBuf>, key_dir: &Path) {

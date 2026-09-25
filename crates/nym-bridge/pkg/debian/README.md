@@ -98,17 +98,33 @@ sudo /usr/lib/nym-bridge/firewall-sync close
 
 ### Refreshing IP Configuration
 
-If your server's public IP addresses change (e.g., after network reconfiguration), you can refresh the configuration:
+Every time the service starts it runs `bridge-cfg --refresh`, which regenerates
+`client_bridge_params.json` from `/etc/nym/bridges.toml`. How the public IPs are handled depends
+on `public_ips_source` in the bridge config:
+
+- `"auto"` (default for newly generated configs): `public_ips` and `forward.address` are taken
+  from the nym-node config (`host.public_ips`, located via `node_config_path`). Detection over the
+  internet is only used if the node config has no public IPs.
+- `"static"` (assumed for configs without the field): `public_ips` and `forward.address` are never
+  modified. Use this if you set the IPs by hand.
+
+Files are only rewritten when their contents change. So after an IP change (update the nym-node
+config first, if it doesn't pick the change up itself), a restart is all that is needed:
 
 ```sh
-# Re-detect public IPs and update config (preserves existing keys)
-sudo bridge-cfg --gen -i /etc/nym/bridges.toml -o /etc/nym/bridges.toml
+# Preview what a refresh would change
+sudo bridge-cfg --refresh -i /etc/nym/bridges.toml --dry-run
 
-# Verify the changes before restarting
-sudo cat /etc/nym/bridges.toml | grep public_ips
-
-# Restart the service
+# Apply it (the service also does this on every start)
 sudo systemctl restart nym-bridge
+```
+
+To switch an existing config to follow the nym-node config, add the following to the top level of
+`/etc/nym/bridges.toml` (above `[forward]`):
+
+```toml
+public_ips_source = "auto"
+node_config_path = "/root/.nym/nym-nodes/default-nym-node/config/config.toml"
 ```
 
 ### Security: File Permissions

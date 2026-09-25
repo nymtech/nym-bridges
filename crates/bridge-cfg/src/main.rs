@@ -33,13 +33,14 @@ use nym_bin_common::bin_info;
 use nym_config::{DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_FILENAME, NYM_DIR, must_get_home};
 use tracing::*;
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 mod bridge_client_config;
 use bridge_client_config::BridgeClientConfig;
 mod bridge_config;
-use bridge_config::BridgeConfig;
+use bridge_config::{BridgeConfig, PublicIpsSource};
 mod node_config;
 use node_config::NodeConfig;
 
@@ -94,6 +95,17 @@ struct ConfigArgs {
     /// Print the resulting config files wih diff info without persisting the changes.
     #[clap(long)]
     dry_run: bool,
+
+    #[clap(long, conflicts_with = "generate_keys")]
+    /// Refresh an existing bridge configuration in place, rather than adapting a new one. If
+    /// `public_ips_source = "auto"` the public IPs and forward address are updated from the
+    /// nym-node config (falling back to detection over the internet). The client parameters are
+    /// always regenerated. No keys are generated and the nym-node config is not modified. Files
+    /// are only written if their contents change.
+    ///
+    /// The bridge config is read from `--in` (default: `<dir>/bridges.toml`) and written to
+    /// `--out` (default: the input path).
+    refresh: bool,
 }
 
 impl ConfigArgs {
@@ -176,18 +188,31 @@ impl ConfigArgs {
         }
     }
 
-    fn adapt_config_files(&self) -> Result<()> {
-        let node_cfg_path = if let Some(path) = &self.node_config {
-            path.clone()
+    /// Path to the nym-node config selected by the CLI arguments, falling back to searching for
+    /// any available node config if the default does not exist.
+    fn resolve_node_config_path(&self) -> Result<PathBuf> {
+        if let Some(path) = &self.node_config {
+            return Ok(path.clone());
+        }
+        let default_path = Self::default_node_config_path(&self.id);
+        if default_path.exists() {
+            Ok(default_path)
         } else {
-            let default_path = Self::default_node_config_path(&self.id);
-            if default_path.exists() {
-                default_path
-            } else {
-                // Try to find any nym-node config
-                Self::find_any_node_config()?.unwrap_or(default_path)
-            }
-        };
+            // Try to find any nym-node config
+            Ok(Self::find_any_node_config()?.unwrap_or(default_path))
+        }
+    }
+
+    fn load_node_config(path: &PathBuf) -> Result<NodeConfig> {
+        if path.exists() {
+            NodeConfig::parse_from_file(path)
+        } else {
+            Ok(NodeConfig::new_without_node())
+        }
+    }
+
+    fn adapt_config_files(&self) -> Result<()> {
+        let node_cfg_path = self.resolve_node_config_path()?;
 
         // try to parse the bridge config or get a default and keep a copy unmodified for diff
         let bridge_cfg_orig = match &self.bridge_config_path_in {
@@ -219,11 +244,7 @@ impl ConfigArgs {
         };
 
         // parse the node configuration
-        let node_cfg_orig = if node_cfg_path.exists() {
-            NodeConfig::parse_from_file(&node_cfg_path)?
-        } else {
-            NodeConfig::new_without_node()
-        };
+        let node_cfg_orig = Self::load_node_config(&node_cfg_path)?;
 
         let configs_in = ConfigsIn {
             bridge_cfg: bridge_cfg_orig,
@@ -286,6 +307,139 @@ impl ConfigArgs {
     }
 }
 
+impl ConfigArgs {
+    /// Refresh an existing bridge configuration in place. See [`ConfigArgs::refresh`].
+    fn refresh_config_files(&self) -> Result<()> {
+        let bridge_cfg_path_in = self
+            .bridge_config_path_in
+            .clone()
+            .unwrap_or(self.out_dir.join(Self::DEFAULT_BRIDGE_CONFIG_FILENAME));
+        let bridge_cfg_path_out = self
+            .bridge_config_path_out
+            .clone()
+            .unwrap_or(bridge_cfg_path_in.clone());
+
+        let bridge_cfg_orig = BridgeConfig::parse_from_file(&bridge_cfg_path_in)?;
+        let mut bridge_cfg = bridge_cfg_orig.clone();
+
+        match bridge_cfg.get_public_ips_source() {
+            PublicIpsSource::Static => {
+                info!(
+                    "public_ips_source is \"static\", leaving public IPs and forward address unchanged"
+                );
+            }
+            PublicIpsSource::Auto => {
+                // prefer the node config recorded when the bridge config was generated, as the
+                // default location depends on the $HOME of whoever runs this.
+                let node_cfg_path = match bridge_cfg.get_node_config_path() {
+                    Some(path) => path,
+                    None => self.resolve_node_config_path()?,
+                };
+                let node_cfg = Self::load_node_config(&node_cfg_path)?;
+                refresh_public_ips(&mut bridge_cfg, &node_cfg);
+            }
+        }
+
+        let Some(bridge_client_cfg_path) = bridge_cfg.get_client_config_path() else {
+            warn!("no client_params_path set in bridge config, client parameters not refreshed");
+            return self.persist_refreshed(
+                &bridge_cfg_orig,
+                &bridge_cfg,
+                bridge_cfg_path_out,
+                None,
+            );
+        };
+        let bridge_client_cfg_orig = if bridge_client_cfg_path.exists() {
+            BridgeClientConfig::parse_from_file(&bridge_client_cfg_path).ok()
+        } else {
+            None
+        };
+        let bridge_client_cfg = BridgeClientConfig::try_from(&bridge_cfg)?;
+
+        self.persist_refreshed(
+            &bridge_cfg_orig,
+            &bridge_cfg,
+            bridge_cfg_path_out,
+            Some((
+                bridge_client_cfg_orig.as_ref(),
+                &bridge_client_cfg,
+                bridge_client_cfg_path,
+            )),
+        )
+    }
+
+    /// Write (or with `--dry-run`, diff) refreshed configs, skipping any that are unchanged.
+    fn persist_refreshed(
+        &self,
+        bridge_cfg_orig: &BridgeConfig,
+        bridge_cfg: &BridgeConfig,
+        bridge_cfg_path: PathBuf,
+        client: Option<(Option<&BridgeClientConfig>, &BridgeClientConfig, PathBuf)>,
+    ) -> Result<()> {
+        let bridge_changed = bridge_cfg.serialize() != bridge_cfg_orig.serialize();
+        if self.dry_run {
+            bridge_cfg.print_diff(Some(bridge_cfg_orig), Some(bridge_cfg_path), Path::new(""));
+        } else if bridge_changed {
+            info!("updating bridge config at {bridge_cfg_path:?}");
+            bridge_cfg.serialize_to_file(bridge_cfg_path)?;
+        } else {
+            info!("bridge config unchanged");
+        }
+
+        if let Some((orig, new, path)) = client {
+            let client_changed = orig.and_then(|c| c.serialize().ok()) != Some(new.serialize()?);
+            if self.dry_run {
+                new.print_diff(orig, path);
+            } else if client_changed {
+                info!("updating client params at {path:?}");
+                new.serialize_to_file(path)?;
+            } else {
+                info!("client params unchanged");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Determine the public IPs for this host, preferring those configured for the nym-node and only
+/// falling back to detection over the internet if the node config has none.
+fn resolve_public_ips(node_cfg: &NodeConfig) -> Vec<IpAddr> {
+    if node_cfg.is_from_file() {
+        if let Some(ips) = node_cfg.public_ips() {
+            info!("using public IPs from nym-node config: {ips:?}");
+            return ips;
+        }
+        info!("no public IPs in nym-node config, attempting detection");
+    }
+    match node_config::get_public_ip_addrs() {
+        Ok(ips) => {
+            if !ips.is_empty() {
+                info!("using detected public IPs: {ips:?}");
+            }
+            ips
+        }
+        Err(e) => {
+            warn!("public IP detection failed: {e:#}");
+            Vec::new()
+        }
+    }
+}
+
+/// Update the bridge public IPs and forward address from the node config (or detection). Existing
+/// public IPs are kept if no new ones can be determined.
+fn refresh_public_ips(bridge_cfg: &mut BridgeConfig, node_cfg: &NodeConfig) {
+    let ips = resolve_public_ips(node_cfg);
+    if ips.is_empty() {
+        warn!("could not determine public IPs - bridge may not be reachable from external clients");
+        warn!(
+            "hint: set host.public_ips in the nym-node config, or set public_ips (with public_ips_source = \"static\") in /etc/nym/bridges.toml"
+        );
+    } else {
+        bridge_cfg.set_public_ips(ips);
+    }
+    bridge_cfg.set_forward_address(node_cfg.get_forward_address());
+}
+
 struct RunOptions {
     generate_keys: bool,
     allow_overwrite: bool,
@@ -320,46 +474,23 @@ impl ConfigRun {
             bridge_cfg.generate_keys(self.opts.allow_overwrite, &self.paths.key_dir)?;
         }
 
-        // Set public IPs for bridge config:
-        // 1. If bridge config already has IPs, keep them (existing config)
-        // 2. Otherwise, try to detect from internet (gets both IPv4 and IPv6)
-        // 3. If detection fails, fall back to nym-node config IPs
-        if bridge_cfg.get_public_ips().is_empty() {
-            match crate::node_config::get_public_ip_addrs() {
-                Ok(detected_ips) if !detected_ips.is_empty() => {
-                    info!("using detected public IPs: {:?}", detected_ips);
-                    bridge_cfg.set_public_ips(detected_ips);
-                }
-                _ => {
-                    // Fall back to nym-node config if detection failed
-                    if let Some(node_ips) = node_cfg.public_ips() {
-                        if !node_ips.is_empty() {
-                            info!("using public IPs from nym-node config: {:?}", node_ips);
-                            bridge_cfg.set_public_ips(node_ips);
-                        } else {
-                            warn!(
-                                "no public IPs available - bridge may not be reachable from external clients"
-                            );
-                            warn!(
-                                "hint: check internet connectivity or manually configure public IPs in bridge config or nym-node config"
-                            );
-                        }
-                    } else {
-                        warn!(
-                            "could not determine public IPs - bridge may not be reachable from external clients"
-                        );
-                        warn!(
-                            "hint: ensure internet connectivity or manually set public_ips in /etc/nym/bridges.toml"
-                        );
-                    }
-                }
-            }
+        // Set public IPs for bridge config. Existing static configs keep the IPs they have (unless
+        // empty); otherwise use the nym-node config IPs, falling back to detection.
+        if bridge_cfg.get_public_ips().is_empty()
+            || bridge_cfg.get_public_ips_source() == PublicIpsSource::Auto
+        {
+            refresh_public_ips(&mut bridge_cfg, &node_cfg);
         }
 
         // adapt the nym-bridge configuration
         let forward_address = node_cfg.get_forward_address();
         bridge_cfg.set_forward_address(forward_address);
         bridge_cfg.set_client_config_path(&self.paths.bridge_client_cfg_path);
+        if node_cfg.is_from_file() {
+            let node_cfg_path = std::fs::canonicalize(&self.paths.node_cfg_path)
+                .unwrap_or(self.paths.node_cfg_path.clone());
+            bridge_cfg.set_node_config_path(&node_cfg_path);
+        }
 
         // adapt the nym-node configuration
         node_cfg.set_bridge_client_config_path(&self.paths.bridge_client_cfg_path);
@@ -419,7 +550,12 @@ fn main() -> Result<()> {
 
     let args = ConfigArgs::parse();
 
-    if let Err(e) = args.adapt_config_files() {
+    let result = if args.refresh {
+        args.refresh_config_files()
+    } else {
+        args.adapt_config_files()
+    };
+    if let Err(e) = result {
         // `{e:#}` (rather than `{e}`) prints the full anyhow causal chain -- otherwise only the
         // outermost context message is shown and the actual underlying error is silently dropped.
         error!("config adaptation failed: {e:#}");

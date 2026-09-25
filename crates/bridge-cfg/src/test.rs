@@ -404,3 +404,130 @@ fn document_mut() -> Result<()> {
 
     Ok(())
 }
+
+/// Generate a bridge config against a copy of the test nym-node config in a temp dir, returning
+/// the args used (with `--in` pointing at the generated bridge config) and the node config path.
+fn generate_for_refresh(tmp_dir: &TempDir) -> Result<(ConfigArgs, PathBuf)> {
+    let node_cfg_src = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test")
+        .join("config.toml");
+    let node_cfg_path = tmp_dir.path().join("node-config.toml");
+    std::fs::copy(node_cfg_src, &node_cfg_path)?;
+
+    let mut args = ConfigArgs {
+        node_config: Some(node_cfg_path.clone()),
+        id: ConfigArgs::DEFAULT_NYMNODE_ID.into(),
+        out_dir: tmp_dir.path().to_path_buf(),
+        bridge_config_path_in: None,
+        bridge_config_path_out: None,
+        generate_keys: true,
+        allow_overwrite: false,
+        dry_run: false,
+        refresh: false,
+    };
+    args.adapt_config_files()?;
+
+    // subsequent refresh runs should not depend on the CLI node config path
+    args.node_config = None;
+    args.generate_keys = false;
+    args.refresh = true;
+    args.bridge_config_path_in = Some(
+        tmp_dir
+            .path()
+            .join(ConfigArgs::DEFAULT_BRIDGE_CONFIG_FILENAME),
+    );
+    Ok((args, node_cfg_path))
+}
+
+fn read_refresh_outputs(args: &ConfigArgs) -> Result<(PersistedServerConfig, String)> {
+    let bridge_cfg_str = std::fs::read_to_string(args.bridge_config_path_in.as_ref().unwrap())?;
+    let client_params = std::fs::read_to_string(
+        args.out_dir
+            .join(ConfigArgs::DEFAULT_BRIDGE_CLIENT_CONFIG_FILENAME),
+    )?;
+    Ok((PersistedServerConfig::parse(bridge_cfg_str)?, client_params))
+}
+
+#[test]
+fn refresh_auto_follows_node_config_ips() -> Result<()> {
+    init_subscriber(None);
+    let tmp_dir = TempDir::new("bridges")?;
+    let (args, node_cfg_path) = generate_for_refresh(&tmp_dir)?;
+
+    // generation prefers the node config IPs and records the node config location
+    let (bridge_cfg, client_params) = read_refresh_outputs(&args)?;
+    assert_eq!(bridge_cfg.public_ips, vec!["1.1.1.1", "2a01::1"]);
+    assert_eq!(bridge_cfg.forward.address, "1.1.1.1:51822".parse().unwrap());
+    assert!(client_params.contains("1.1.1.1:"));
+    let generated = BridgeConfig::parse_from_file(args.bridge_config_path_in.as_ref().unwrap())?;
+    assert_eq!(generated.get_public_ips_source(), PublicIpsSource::Auto);
+    assert_eq!(
+        generated.get_node_config_path(),
+        Some(std::fs::canonicalize(&node_cfg_path)?)
+    );
+
+    // the node moves to a new IP
+    let node_cfg = std::fs::read_to_string(&node_cfg_path)?.replace("1.1.1.1", "5.6.7.8");
+    std::fs::write(&node_cfg_path, node_cfg)?;
+    args.refresh_config_files()?;
+
+    let (bridge_cfg, client_params) = read_refresh_outputs(&args)?;
+    assert_eq!(bridge_cfg.public_ips, vec!["5.6.7.8", "2a01::1"]);
+    assert_eq!(bridge_cfg.forward.address, "5.6.7.8:51822".parse().unwrap());
+    assert!(client_params.contains("5.6.7.8:"));
+    assert!(!client_params.contains("1.1.1.1"));
+    Ok(())
+}
+
+#[test]
+fn refresh_static_keeps_ips_but_regenerates_client_params() -> Result<()> {
+    init_subscriber(None);
+    let tmp_dir = TempDir::new("bridges")?;
+    let (args, node_cfg_path) = generate_for_refresh(&tmp_dir)?;
+    let bridge_cfg_path = args.bridge_config_path_in.clone().unwrap();
+
+    // simulate a config that predates `public_ips_source` (treated as static), with a hand-set
+    // public IP and a changed QUIC port.
+    let legacy = std::fs::read_to_string(&bridge_cfg_path)?
+        .lines()
+        .filter(|l| !l.starts_with("public_ips_source"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace(r#""1.1.1.1""#, r#""9.9.9.9""#)
+        .replacen("[::]:4443", "[::]:8443", 1);
+    std::fs::write(&bridge_cfg_path, legacy)?;
+    let node_cfg = std::fs::read_to_string(&node_cfg_path)?.replace("1.1.1.1", "5.6.7.8");
+    std::fs::write(&node_cfg_path, node_cfg)?;
+
+    args.refresh_config_files()?;
+
+    let (bridge_cfg, client_params) = read_refresh_outputs(&args)?;
+    assert_eq!(bridge_cfg.public_ips, vec!["9.9.9.9", "2a01::1"]);
+    assert_eq!(bridge_cfg.forward.address, "1.1.1.1:51822".parse().unwrap());
+    assert!(client_params.contains("9.9.9.9:8443"));
+    assert!(!client_params.contains("5.6.7.8"));
+    Ok(())
+}
+
+#[test]
+fn refresh_leaves_unchanged_files_untouched() -> Result<()> {
+    init_subscriber(None);
+    let tmp_dir = TempDir::new("bridges")?;
+    let (args, _) = generate_for_refresh(&tmp_dir)?;
+    let bridge_cfg_path = args.bridge_config_path_in.clone().unwrap();
+    let client_params_path = args
+        .out_dir
+        .join(ConfigArgs::DEFAULT_BRIDGE_CLIENT_CONFIG_FILENAME);
+
+    let mtimes = || -> Result<_> {
+        Ok((
+            std::fs::metadata(&bridge_cfg_path)?.modified()?,
+            std::fs::metadata(&client_params_path)?.modified()?,
+        ))
+    };
+    let before = mtimes()?;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    args.refresh_config_files()?;
+    assert_eq!(before, mtimes()?);
+    Ok(())
+}
