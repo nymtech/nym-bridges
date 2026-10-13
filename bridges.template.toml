@@ -108,6 +108,11 @@ listen = "[::]:4422"
 # (UDP) Socket address to listen on
 # listen = "[::]:51830"
 #
+# Wire format on this port: 1 = AmneziaWG 1.0 (default), 2 = AmneziaWG 3.1 (S3/S4 padding, header
+# ranges, header protection, trailers). Run one block per version on separate ports while clients
+# upgrade; `bridge-cfg --gen` generates params matching the version.
+# protocol_version = 1
+#
 # Maximum number of concurrent client sessions to allow (default 10000). Each session holds one
 # socket, so keep the service file limit (`LimitNOFILE`) above this value.
 # connection_limit = 10000

@@ -347,16 +347,26 @@ pub mod amnezia {
     use crate::Sufficiency;
     #[cfg(feature = "serde")]
     use serde::{Deserialize, Serialize};
-    use std::net::SocketAddr;
+    use std::{net::SocketAddr, ops::RangeInclusive};
 
     #[cfg(feature = "typescript-bindings")]
     use ts_rs::TS;
 
-    /// AmneziaWG 1.0 framing (S1/S2 handshake padding, H3/H4 types) with WireGuard handshake types.
-    pub const PROTOCOL_VERSION: u16 = 1;
+    /// AmneziaWG 1.0 framing: S1/S2 handshake padding, fixed H3/H4.
+    pub const PROTOCOL_AWG_1_0: u16 = 1;
+    /// AmneziaWG 3.1 framing: adds S3/S4 padding, H3/H4 ranges, header protection and trailers.
+    pub const PROTOCOL_AWG_3_1: u16 = 2;
 
     /// Largest junk prefix amneziawg clients accept on a handshake message.
     pub const MAX_JUNK_SIZE: u16 = 1280;
+    /// S4 cap: every data packet carries it, and mobile clients keep only 60 bytes of MTU headroom.
+    pub const MAX_TRANSPORT_JUNK_SIZE: u16 = 32;
+    /// Widest H3/H4 range allowed with random trailers. A receiver accepts any datagram longer than
+    /// a padded cookie reply as a possible cookie, so a transport packet is misread with odds of
+    /// range width / 2^32; 255 keeps that below one in 16 million.
+    pub const MAX_HEADER_RANGE_WITH_TRAILERS: u32 = 255;
+    /// Header protection takes its ChaCha20 nonce from the first padding bytes of a datagram.
+    pub const HEADER_PROTECTION_NONCE_SIZE: u16 = 12;
 
     #[derive(Debug, PartialEq, Clone)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -376,22 +386,85 @@ pub mod amnezia {
         pub init_pkt_junk_size: u16,
         /// S2 - random bytes prepended to the handshake response.
         pub response_pkt_junk_size: u16,
-        /// H3 - message type replacing the cookie reply type.
+        /// H3 - message type replacing the cookie reply type (lower end of the range).
         pub under_load_pkt_magic_header: u32,
-        /// H4 - message type replacing the transport data type.
+        /// H4 - message type replacing the transport data type (lower end of the range).
         pub transport_pkt_magic_header: u32,
+        /// S3 - random bytes prepended to the cookie reply (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        pub cookie_pkt_junk_size: u16,
+        /// S4 - random bytes prepended to every transport packet (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        pub transport_pkt_junk_size: u16,
+        /// Upper end of the H3 range, H3 when absent (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "typescript-bindings", ts(optional))]
+        pub under_load_pkt_magic_header_max: Option<u32>,
+        /// Upper end of the H4 range, H4 when absent (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "typescript-bindings", ts(optional))]
+        pub transport_pkt_magic_header_max: Option<u32>,
+        /// Hex encoded 32 byte ChaCha20 key masking every message header (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "typescript-bindings", ts(optional))]
+        pub header_protection_key: Option<String>,
+        /// Handshake and cookie messages may carry random trailing bytes (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        pub random_trailers: bool,
+    }
+
+    impl AmneziaParams {
+        pub fn under_load_headers(&self) -> RangeInclusive<u32> {
+            let max = self.under_load_pkt_magic_header_max;
+            self.under_load_pkt_magic_header..=max.unwrap_or(self.under_load_pkt_magic_header)
+        }
+
+        pub fn transport_headers(&self) -> RangeInclusive<u32> {
+            let max = self.transport_pkt_magic_header_max;
+            self.transport_pkt_magic_header..=max.unwrap_or(self.transport_pkt_magic_header)
+        }
+
+        /// No AmneziaWG 3.1 fields set, so an AmneziaWG 1.0 client reads these params correctly.
+        pub fn is_awg_1_0(&self) -> bool {
+            self.cookie_pkt_junk_size == 0
+                && self.transport_pkt_junk_size == 0
+                && self.under_load_pkt_magic_header_max.is_none()
+                && self.transport_pkt_magic_header_max.is_none()
+                && self.header_protection_key.is_none()
+                && !self.random_trailers
+        }
     }
 
     impl Sufficiency for AmneziaParams {
-        // H3/H4 must not collide with plain WireGuard types (1-4) or each other, and padded
-        // initiation and response must differ in size (148 + S1 != 92 + S2).
+        // H3/H4 ranges must not reach plain WireGuard types (1-4) or overlap, padded initiation and
+        // response must differ in size (148 + S1 != 92 + S2), and header protection needs a nonce
+        // worth of padding on every message type.
         fn is_sufficient(&self) -> bool {
-            self.init_pkt_junk_size <= MAX_JUNK_SIZE
-                && self.response_pkt_junk_size <= MAX_JUNK_SIZE
+            let paddings = [
+                self.init_pkt_junk_size,
+                self.response_pkt_junk_size,
+                self.cookie_pkt_junk_size,
+                self.transport_pkt_junk_size,
+            ];
+            let (h3, h4) = (self.under_load_headers(), self.transport_headers());
+            let key_ok = self.header_protection_key.as_ref().is_none_or(|key| {
+                key.len() == 64
+                    && key.bytes().all(|b| b.is_ascii_hexdigit())
+                    && paddings.iter().all(|s| *s >= HEADER_PROTECTION_NONCE_SIZE)
+            });
+            paddings.iter().all(|s| *s <= MAX_JUNK_SIZE)
+                && self.transport_pkt_junk_size <= MAX_TRANSPORT_JUNK_SIZE
                 && self.init_pkt_junk_size + 56 != self.response_pkt_junk_size
-                && self.under_load_pkt_magic_header > 4
-                && self.transport_pkt_magic_header > 4
-                && self.under_load_pkt_magic_header != self.transport_pkt_magic_header
+                && *h3.start() > 4
+                && *h4.start() > 4
+                && !h3.is_empty()
+                && !h4.is_empty()
+                && (h3.end() < h4.start() || h4.end() < h3.start())
+                && (!self.random_trailers
+                    || [&h3, &h4]
+                        .iter()
+                        .all(|h| h.end() - h.start() <= MAX_HEADER_RANGE_WITH_TRAILERS))
+                && key_ok
         }
     }
 
@@ -407,7 +480,8 @@ pub mod amnezia {
     )]
     #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     pub struct AmneziaClientOptions {
-        /// Translator wire format; see [`PROTOCOL_VERSION`]. Clients skip versions they do not know.
+        /// Translator wire format, [`PROTOCOL_AWG_1_0`] or [`PROTOCOL_AWG_3_1`]. Clients skip
+        /// versions they do not know.
         pub protocol_version: u16,
 
         /// UDP addresses of the bridge translator (IPv4/IPv6 pair of the same bridge).
@@ -418,8 +492,14 @@ pub mod amnezia {
     }
 
     impl Sufficiency for AmneziaClientOptions {
+        // A 1.0 profile must not carry 3.1 fields an amneziawg 1.0 client would ignore.
         fn is_sufficient(&self) -> bool {
-            !self.addresses.is_empty() && self.params.is_sufficient()
+            let version_ok = match self.protocol_version {
+                PROTOCOL_AWG_1_0 => self.params.is_awg_1_0(),
+                PROTOCOL_AWG_3_1 => true,
+                _ => false,
+            };
+            !self.addresses.is_empty() && self.params.is_sufficient() && version_ok
         }
     }
 
@@ -479,13 +559,19 @@ mod test {
 
     fn amnezia_options() -> amnezia::ClientOptions {
         amnezia::ClientOptions {
-            protocol_version: amnezia::PROTOCOL_VERSION,
+            protocol_version: amnezia::PROTOCOL_AWG_1_0,
             addresses: vec!["139.162.33.226:51830".parse().unwrap()],
             params: amnezia::AmneziaParams {
                 init_pkt_junk_size: 40,
                 response_pkt_junk_size: 50,
                 under_load_pkt_magic_header: 1_766_607_858,
-                transport_pkt_magic_header: 2_528_465_083,
+                transport_pkt_magic_header: 2_028_465_083,
+                cookie_pkt_junk_size: 0,
+                transport_pkt_junk_size: 0,
+                under_load_pkt_magic_header_max: None,
+                transport_pkt_magic_header_max: None,
+                header_protection_key: None,
+                random_trailers: false,
             },
         }
     }
@@ -521,5 +607,54 @@ mod test {
         let mut no_addresses = amnezia_options();
         no_addresses.addresses.clear();
         assert!(!no_addresses.is_sufficient());
+    }
+
+    fn awg_3_1_options() -> amnezia::ClientOptions {
+        let mut options = amnezia_options();
+        options.protocol_version = amnezia::PROTOCOL_AWG_3_1;
+        options.params.cookie_pkt_junk_size = 20;
+        options.params.transport_pkt_junk_size = 16;
+        options.params.under_load_pkt_magic_header_max = Some(1_766_607_958);
+        options.params.transport_pkt_magic_header_max = Some(2_028_465_183);
+        options.params.header_protection_key = Some("ab".repeat(32));
+        options.params.random_trailers = true;
+        options
+    }
+
+    #[test]
+    fn amnezia_3_1_sufficiency() {
+        assert!(awg_3_1_options().is_sufficient());
+
+        let mut short_padding = awg_3_1_options();
+        short_padding.params.transport_pkt_junk_size = 8;
+        assert!(!short_padding.is_sufficient());
+
+        let mut mtu_eating_padding = awg_3_1_options();
+        mtu_eating_padding.params.transport_pkt_junk_size = amnezia::MAX_TRANSPORT_JUNK_SIZE + 1;
+        assert!(!mtu_eating_padding.is_sufficient());
+
+        let mut overlapping = awg_3_1_options();
+        overlapping.params.random_trailers = false;
+        overlapping.params.under_load_pkt_magic_header_max = Some(2_050_000_000);
+        assert!(!overlapping.is_sufficient());
+
+        let mut colliding_with_trailers = awg_3_1_options();
+        colliding_with_trailers
+            .params
+            .transport_pkt_magic_header_max =
+            Some(2_028_465_083 + amnezia::MAX_HEADER_RANGE_WITH_TRAILERS + 1);
+        assert!(!colliding_with_trailers.is_sufficient());
+
+        let mut bad_key = awg_3_1_options();
+        bad_key.params.header_protection_key = Some("zz".repeat(32));
+        assert!(!bad_key.is_sufficient());
+
+        let mut downgraded = awg_3_1_options();
+        downgraded.protocol_version = amnezia::PROTOCOL_AWG_1_0;
+        assert!(!downgraded.is_sufficient());
+
+        let mut unknown = awg_3_1_options();
+        unknown.protocol_version = 99;
+        assert!(!unknown.is_sufficient());
     }
 }

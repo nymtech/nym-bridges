@@ -37,6 +37,7 @@ anyhow.workspace = true
 base64.workspace = true
 bs58.workspace = true
 bytes.workspace = true
+chacha20 = "0.10"
 ed25519-dalek = { workspace = true, features = [
     "pkcs8",
     "alloc",

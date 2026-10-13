@@ -344,9 +344,52 @@ async fn launch_amnezia_listener(
     fwd_cfg: ForwardConfig,
     options: amnezia::ServerConfig,
 ) -> Result<()> {
-    let socket = UdpSocket::bind(&options.listen).await?;
-    tracing::info!("amnezia transport listening on {}", &options.listen);
-    run_amnezia_listener(socket, token, fwd_cfg, options).await
+    // One SO_REUSEPORT socket per core on Linux: the kernel keeps each client on one socket, so a
+    // session stays with one listener while the gateway's clients spread across cores.
+    let sockets = if cfg!(target_os = "linux") {
+        std::thread::available_parallelism().map_or(1, |n| n.get())
+    } else {
+        1
+    };
+    let limit = options
+        .connection_limit
+        .unwrap_or(AMNEZIA_DEFAULT_SESSION_LIMIT)
+        .div_ceil(sockets);
+    let mut listeners = tokio::task::JoinSet::new();
+    for _ in 0..sockets {
+        let options = amnezia::ServerConfig {
+            connection_limit: Some(limit),
+            ..options.clone()
+        };
+        let socket = bind_reuse_port(options.listen)?;
+        listeners.spawn(run_amnezia_listener(
+            socket,
+            token.clone(),
+            fwd_cfg.clone(),
+            options,
+        ));
+    }
+    tracing::info!(
+        "amnezia transport listening on {} ({sockets} sockets)",
+        &options.listen
+    );
+    while let Some(res) = listeners.join_next().await {
+        res??;
+    }
+    Ok(())
+}
+
+fn bind_reuse_port(listen: SocketAddr) -> std::io::Result<UdpSocket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(listen),
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    #[cfg(target_os = "linux")]
+    socket.set_reuse_port(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&listen.into())?;
+    UdpSocket::from_std(socket.into())
 }
 
 /// Owns the session map; session tasks report back on `closed_rx` when they go idle.
@@ -359,7 +402,11 @@ async fn run_amnezia_listener(
     if !options.is_sufficient() {
         anyhow::bail!("amnezia transport params are missing or invalid");
     }
-    let params = options.params.context("missing amnezia params")?;
+    let framing = options
+        .params
+        .as_ref()
+        .and_then(amnezia::Framing::new)
+        .context("invalid amnezia params")?;
     let limit = options
         .connection_limit
         .unwrap_or(AMNEZIA_DEFAULT_SESSION_LIMIT);
@@ -394,7 +441,7 @@ async fn run_amnezia_listener(
             },
         };
         // Junk and decoy packets are dropped before they can open a session.
-        let Some(offset) = amnezia::decode(&params, &mut buf[..len]) else {
+        let Some(msg) = framing.decode(&mut buf[..len]) else {
             continue;
         };
 
@@ -419,7 +466,7 @@ async fn run_amnezia_listener(
                     socket.clone(),
                     session.clone(),
                     client,
-                    params.clone(),
+                    framing.clone(),
                     closed_tx.clone(),
                     started,
                     token.clone(),
@@ -430,7 +477,7 @@ async fn run_amnezia_listener(
         last_seen.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
 
         upstream
-            .send(&buf[offset..len])
+            .send(&buf[msg])
             .await
             .inspect_err(|e| debug!("amnezia forward to {} failed: {e}", fwd_cfg.address))
             .ok();
@@ -442,15 +489,18 @@ async fn amnezia_session(
     socket: Arc<UdpSocket>,
     (upstream, last_seen): AmneziaSession,
     client: SocketAddr,
-    params: amnezia::AmneziaParams,
+    framing: amnezia::Framing,
     closed_tx: mpsc::UnboundedSender<SocketAddr>,
     started: Instant,
     token: CancellationToken,
 ) {
+    // Headroom for the transport padding, so replies are encoded without a copy.
+    let headroom = framing.transport_padding();
     let mut buf = BytesMut::new();
     loop {
         buf.clear();
-        buf.reserve(AMNEZIA_SESSION_BUF);
+        buf.reserve(headroom + AMNEZIA_SESSION_BUF);
+        buf.resize(headroom, 0);
         let res = tokio::select! {
             _ = token.cancelled() => break,
             res = tokio::time::timeout(AMNEZIA_SESSION_IDLE_TIMEOUT, upstream.recv_buf(&mut buf)) => res,
@@ -467,7 +517,7 @@ async fn amnezia_session(
             }
             _ => break,
         }
-        if amnezia::encode(&params, &mut buf) {
+        if framing.encode(&mut buf, headroom) {
             socket
                 .send_to(&buf, client)
                 .await
@@ -591,6 +641,12 @@ mod test {
             response_pkt_junk_size: 50,
             under_load_pkt_magic_header: 1_766_607_858,
             transport_pkt_magic_header: 2_028_465_083,
+            cookie_pkt_junk_size: 0,
+            transport_pkt_junk_size: 0,
+            under_load_pkt_magic_header_max: None,
+            transport_pkt_magic_header_max: None,
+            header_protection_key: None,
+            random_trailers: false,
         }
     }
 
@@ -602,18 +658,32 @@ mod test {
     }
 
     fn encoded(mut msg: BytesMut) -> BytesMut {
-        assert!(amnezia::encode(&params(), &mut msg));
+        assert!(
+            amnezia::Framing::new(&params())
+                .unwrap()
+                .encode(&mut msg, 0)
+        );
         msg
     }
 
     /// Starts a listener forwarding to `node`, the stand-in for the node's WireGuard socket.
     async fn spawn_listener(node: &UdpSocket, connection_limit: Option<usize>) -> SocketAddr {
+        spawn_profile(node, connection_limit, amnezia::PROTOCOL_AWG_1_0, params()).await
+    }
+
+    async fn spawn_profile(
+        node: &UdpSocket,
+        connection_limit: Option<usize>,
+        protocol_version: u16,
+        params: amnezia::AmneziaParams,
+    ) -> SocketAddr {
         let socket = UdpSocket::bind("[::1]:0").await.unwrap();
         let listen = socket.local_addr().unwrap();
         let options = amnezia::ServerConfig {
             listen,
             connection_limit,
-            params: Some(params()),
+            protocol_version,
+            params: Some(params),
         };
         let fwd_cfg = ForwardConfig {
             address: node.local_addr().unwrap(),
@@ -706,5 +776,46 @@ mod test {
             assert_eq!(*upstream.get_or_insert(from), from);
             tokio::time::sleep(Duration::from_secs(150)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn amnezia_listener_round_trips_awg_3_1_transport() {
+        let awg_3_1 = amnezia::AmneziaParams {
+            cookie_pkt_junk_size: 20,
+            transport_pkt_junk_size: 16,
+            under_load_pkt_magic_header_max: Some(1_766_607_958),
+            transport_pkt_magic_header_max: Some(2_028_465_183),
+            header_protection_key: Some("ab".repeat(32)),
+            random_trailers: true,
+            ..params()
+        };
+        let framing = amnezia::Framing::new(&awg_3_1).unwrap();
+        let node = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listen = spawn_profile(&node, None, amnezia::PROTOCOL_AWG_3_1, awg_3_1).await;
+        let client = connected_client(listen).await;
+        let mut buf = vec![0u8; 2048];
+
+        let mut wire = wg_msg(4, 1420);
+        assert!(framing.encode(&mut wire, 0));
+        client.send(&wire).await.unwrap();
+
+        let (len, from) = node.recv_from(&mut buf).await.unwrap();
+        assert_eq!(buf[..len], wg_msg(4, 1420)[..]);
+        node.send_to(&buf[..len], from).await.unwrap();
+
+        let len = client.recv(&mut buf).await.unwrap();
+        assert_eq!(len, 16 + 1420);
+        let mut reply = BytesMut::from(&buf[..len]);
+        let msg = framing.decode(&mut reply).unwrap();
+        assert_eq!(reply[msg], wg_msg(4, 1420)[..]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn amnezia_reuse_port_sockets_share_the_port() {
+        let first = bind_reuse_port("[::1]:0".parse().unwrap()).unwrap();
+        let listen = first.local_addr().unwrap();
+
+        assert!(bind_reuse_port(listen).is_ok());
     }
 }
