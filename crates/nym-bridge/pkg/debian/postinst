@@ -109,6 +109,8 @@ configure_firewall() {
 
 case "$1" in
 configure)
+    # Raise the socket buffer cap now; systemd-sysctl applies it on later boots.
+    sysctl -q -p /usr/lib/sysctl.d/60-nym-bridge.conf || true
     create_user
     create_first_time_configuration
     fix_permissions

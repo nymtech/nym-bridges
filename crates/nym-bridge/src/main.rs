@@ -33,6 +33,9 @@ const AMNEZIA_MAX_DATAGRAM: usize = 65535;
 const AMNEZIA_DEFAULT_SESSION_LIMIT: usize = 10_000;
 /// Replies from the node are WireGuard datagrams sized for a 1500 byte MTU.
 const AMNEZIA_SESSION_BUF: usize = 2048;
+/// Kernel WireGuard hands a burst of replies over loopback at once; the 208 KiB default drops the
+/// tail of long-RTT bursts. Capped by `net.core.rmem_max` (raised by the package's sysctl file).
+const AMNEZIA_SOCKET_BUF: usize = 4 << 20;
 
 /// Upstream socket per client, with the millis since listener start of its last datagram.
 type AmneziaSession = (Arc<UdpSocket>, Arc<AtomicU64>);
@@ -362,6 +365,11 @@ async fn launch_amnezia_listener(
             ..options.clone()
         };
         let socket = bind_reuse_port(options.listen)?;
+        if listeners.is_empty()
+            && socket2::SockRef::from(&socket).recv_buffer_size()? < AMNEZIA_SOCKET_BUF
+        {
+            warn!("amnezia socket buffer capped by net.core.rmem_max: long-RTT replies drop");
+        }
         listeners.spawn(run_amnezia_listener(
             socket,
             token.clone(),
@@ -388,6 +396,7 @@ fn bind_reuse_port(listen: SocketAddr) -> std::io::Result<UdpSocket> {
     #[cfg(target_os = "linux")]
     socket.set_reuse_port(true)?;
     socket.set_nonblocking(true)?;
+    socket.set_recv_buffer_size(AMNEZIA_SOCKET_BUF)?;
     socket.bind(&listen.into())?;
     UdpSocket::from_std(socket.into())
 }
@@ -451,6 +460,7 @@ async fn run_amnezia_listener(
             None => {
                 let upstream = async {
                     let upstream = UdpSocket::bind(upstream_bind).await?;
+                    socket2::SockRef::from(&upstream).set_recv_buffer_size(AMNEZIA_SOCKET_BUF)?;
                     upstream.connect(fwd_cfg.address).await?;
                     Ok::<_, std::io::Error>(Arc::new(upstream))
                 }
