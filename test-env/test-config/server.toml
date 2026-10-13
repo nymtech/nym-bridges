@@ -41,3 +41,37 @@ client_auth_key = "W5sNeuRfYBxkNQoWMGTci/k/IENqSPrmXW9ROSy52Pg="
 
 banner = "SSH-2.0-OpenSSH_9.6.1"
 client_banner = "SSH-2.0-OpenSSH_9.6"
+
+[[transports]]
+transport_type = "amnezia"
+
+[transports.args]
+listen = "[::]:51830"
+
+# AmneziaWG 1.0. S1 = 44 and S2 = 52 put padded handshakes on sizes real transport packets also use
+# (32 + 16k), so the lab exercises size collisions. Fixed so test-env/wg0/awg-up.sh can match.
+[transports.args.params]
+init_pkt_junk_size = 44
+response_pkt_junk_size = 52
+under_load_pkt_magic_header = 123456789
+transport_pkt_magic_header = 1623456789
+
+[[transports]]
+transport_type = "amnezia"
+
+[transports.args]
+listen = "[::]:51831"
+protocol_version = 2
+
+# AmneziaWG 3.1: S3/S4 padding, header ranges, header protection, random trailers.
+[transports.args.params]
+init_pkt_junk_size = 44
+response_pkt_junk_size = 52
+cookie_pkt_junk_size = 20
+transport_pkt_junk_size = 16
+under_load_pkt_magic_header = 123456789
+under_load_pkt_magic_header_max = 123456889
+transport_pkt_magic_header = 1623456789
+transport_pkt_magic_header_max = 1623456889
+header_protection_key = "0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff0"
+random_trailers = true

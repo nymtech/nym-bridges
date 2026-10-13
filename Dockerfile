@@ -1,9 +1,24 @@
 FROM ubuntu:24.04 AS base
 
 RUN apt-get update && \
-    apt-get install -y wireguard iproute2 iputils-ping gcc-multilib && \
-    apt-get install -y netcat-traditional tcpdump vim && \
+    apt-get install -y wireguard iproute2 iputils-ping && \
+    if [ "$(dpkg --print-architecture)" = amd64 ]; then apt-get install -y gcc-multilib; fi && \
+    apt-get install -y netcat-traditional tcpdump vim iptables socat xxd iperf3 && \
     mkdir -p /etc/wireguard /etc/nym/default-nym-node/bridges
+
+
+# Reference AmneziaWG clients: AWG_VERSION matches nym-vpn-client's wireguard/libwg, the legacy
+# build matches clients already in the field.
+FROM golang:1.25 AS awg
+ARG AWG_VERSION=v3.1.20260828
+ARG AWG_LEGACY_VERSION=v0.2.13
+RUN for v in "$AWG_VERSION" "$AWG_LEGACY_VERSION"; do \
+        git clone -q --depth 1 --branch "$v" https://github.com/amnezia-vpn/amneziawg-go "/src-$v" && \
+        (cd "/src-$v" && CGO_ENABLED=0 go build -o "/out/$v" .) || exit 1; \
+    done && \
+    cp "/out/$AWG_VERSION" /amneziawg-go && \
+    cp "/out/$AWG_LEGACY_VERSION" /amneziawg-go-legacy && \
+    printf 'amneziawg-go %s\namneziawg-go-legacy %s\n' "$AWG_VERSION" "$AWG_LEGACY_VERSION" > /amneziawg-go.versions
 
 
 FROM rust:1.96 AS builder
@@ -59,7 +74,11 @@ COPY test-env/test-config/*.toml /etc/nym/default-nym-node/
 COPY test-env/test-config/keys/* /etc/nym/default-nym-node/bridges/
 COPY test-env/wg0/*.conf /etc/wireguard/
 COPY test-env/wg0/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY test-env/wg0/awg-up.sh /usr/local/bin/awg-up
+RUN chmod +x /entrypoint.sh /usr/local/bin/awg-up
+
+COPY --from=awg /amneziawg-go /amneziawg-go-legacy /usr/local/bin/
+COPY --from=awg /amneziawg-go.versions /etc/amneziawg-go.versions
 
 COPY --from=builder /usr/local/cargo/bin/* /usr/local/bin/
 
