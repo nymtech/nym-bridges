@@ -13,6 +13,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+bytes.workspace = true
 clap = { workspace = true, features = ["derive"] }
 quinn.workspace = true
 rustls = { workspace = true, default-features = false, features = [
@@ -40,6 +41,9 @@ tracing-subscriber = { workspace = true, default-features = false, features = [
 nym-bridges = { path = "../nym-bridges" }
 
 nym-bin-common = "1.21.4"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 # ------------------------------------------------------------------------------
 # START DEBIAN PACKAGING

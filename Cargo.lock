@@ -1897,6 +1897,7 @@ name = "nym-bridge"
 version = "0.2.3-rc.1"
 dependencies = [
  "anyhow",
+ "bytes",
  "clap",
  "nym-bin-common",
  "nym-bridges",

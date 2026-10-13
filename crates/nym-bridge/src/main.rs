@@ -1,20 +1,41 @@
 use anyhow::{Context, Result};
+use bytes::BytesMut;
 use clap::Parser;
 use nym_bin_common::bin_info;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::signal;
+use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::{net::SocketAddr, path::PathBuf};
+use std::time::Duration;
+use std::{
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    path::PathBuf,
+};
 
 use nym_bridges::{
     config::{ForwardConfig, PersistedServerConfig, TransportServerConfig},
     forward::responder::process_udp,
     session::Session,
-    transport::{quic, ssh, tls},
+    transport::{amnezia, quic, ssh, tls},
+    types::Sufficiency,
 };
+
+/// WireGuard RejectAfterTime: a session silent for longer than this has no live keys left.
+const AMNEZIA_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
+const AMNEZIA_MAX_DATAGRAM: usize = 65535;
+/// Session cap when `connection_limit` is unset, so spoofed sources cannot exhaust sockets.
+const AMNEZIA_DEFAULT_SESSION_LIMIT: usize = 10_000;
+/// Replies from the node are WireGuard datagrams sized for a 1500 byte MTU.
+const AMNEZIA_SESSION_BUF: usize = 2048;
+
+/// Upstream socket per client, with the millis since listener start of its last datagram.
+type AmneziaSession = (Arc<UdpSocket>, Arc<AtomicU64>);
 
 #[derive(Debug, Parser, PartialEq)]
 #[command(author="Nymtech", version, long_version = pretty_build_info_static())]
@@ -94,6 +115,16 @@ async fn main() -> Result<()> {
                     let err_token = cloned_token.clone();
                     if let Err(e) = launch_ssh_listener(cloned_token, fwd_config, options).await {
                         error!("SSH Listener failed: {e}");
+                        err_token.cancel();
+                    }
+                });
+            }
+            TransportServerConfig::Amnezia(options) => {
+                transport_listeners.spawn(async {
+                    let err_token = cloned_token.clone();
+                    if let Err(e) = launch_amnezia_listener(cloned_token, fwd_config, options).await
+                    {
+                        error!("Amnezia Listener failed: {e}");
                         err_token.cancel();
                     }
                 });
@@ -308,6 +339,145 @@ async fn handle_ssh_connection_inner(
     Ok(())
 }
 
+async fn launch_amnezia_listener(
+    token: CancellationToken,
+    fwd_cfg: ForwardConfig,
+    options: amnezia::ServerConfig,
+) -> Result<()> {
+    let socket = UdpSocket::bind(&options.listen).await?;
+    tracing::info!("amnezia transport listening on {}", &options.listen);
+    run_amnezia_listener(socket, token, fwd_cfg, options).await
+}
+
+/// Owns the session map; session tasks report back on `closed_rx` when they go idle.
+async fn run_amnezia_listener(
+    socket: UdpSocket,
+    token: CancellationToken,
+    fwd_cfg: ForwardConfig,
+    options: amnezia::ServerConfig,
+) -> Result<()> {
+    if !options.is_sufficient() {
+        anyhow::bail!("amnezia transport params are missing or invalid");
+    }
+    let params = options.params.context("missing amnezia params")?;
+    let limit = options
+        .connection_limit
+        .unwrap_or(AMNEZIA_DEFAULT_SESSION_LIMIT);
+    // Same family as the forward address; `[::]` cannot reach IPv4 on `bindv6only` hosts.
+    let upstream_bind: SocketAddr = match fwd_cfg.address {
+        SocketAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
+        SocketAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
+    };
+
+    let socket = Arc::new(socket);
+    let started = Instant::now();
+    let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
+    let mut sessions = HashMap::new();
+    let mut buf = vec![0u8; AMNEZIA_MAX_DATAGRAM];
+    loop {
+        let (len, client) = tokio::select! {
+            _ = token.cancelled() => {
+                info!("amnezia listener shutting down");
+                return Ok(())
+            }
+            Some(client) = closed_rx.recv() => {
+                sessions.remove(&client);
+                continue;
+            }
+            res = socket.recv_from(&mut buf) => match res {
+                Ok(res) => res,
+                // Transient socket errors must not take down the other transports.
+                Err(e) => {
+                    warn!("amnezia receive failed: {e}");
+                    continue;
+                }
+            },
+        };
+        // Junk and decoy packets are dropped before they can open a session.
+        let Some(offset) = amnezia::decode(&params, &mut buf[..len]) else {
+            continue;
+        };
+
+        let (upstream, last_seen) = match sessions.get(&client) {
+            Some(session) => AmneziaSession::clone(session),
+            None if sessions.len() >= limit => continue,
+            None => {
+                let upstream = async {
+                    let upstream = UdpSocket::bind(upstream_bind).await?;
+                    upstream.connect(fwd_cfg.address).await?;
+                    Ok::<_, std::io::Error>(Arc::new(upstream))
+                }
+                .await;
+                let Ok(upstream) =
+                    upstream.inspect_err(|e| warn!("amnezia upstream socket failed: {e}"))
+                else {
+                    continue;
+                };
+                let session = (upstream, Arc::new(AtomicU64::new(0)));
+                sessions.insert(client, session.clone());
+                tokio::spawn(amnezia_session(
+                    socket.clone(),
+                    session.clone(),
+                    client,
+                    params.clone(),
+                    closed_tx.clone(),
+                    started,
+                    token.clone(),
+                ));
+                session
+            }
+        };
+        last_seen.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+
+        upstream
+            .send(&buf[offset..len])
+            .await
+            .inspect_err(|e| debug!("amnezia forward to {} failed: {e}", fwd_cfg.address))
+            .ok();
+    }
+}
+
+/// Carries the node's replies back to one client until the session goes idle.
+async fn amnezia_session(
+    socket: Arc<UdpSocket>,
+    (upstream, last_seen): AmneziaSession,
+    client: SocketAddr,
+    params: amnezia::AmneziaParams,
+    closed_tx: mpsc::UnboundedSender<SocketAddr>,
+    started: Instant,
+    token: CancellationToken,
+) {
+    let mut buf = BytesMut::new();
+    loop {
+        buf.clear();
+        buf.reserve(AMNEZIA_SESSION_BUF);
+        let res = tokio::select! {
+            _ = token.cancelled() => break,
+            res = tokio::time::timeout(AMNEZIA_SESSION_IDLE_TIMEOUT, upstream.recv_buf(&mut buf)) => res,
+        };
+        match res {
+            Ok(Ok(_)) => {}
+            // Client traffic alone keeps the session alive.
+            Err(_)
+                if started.elapsed()
+                    < Duration::from_millis(last_seen.load(Ordering::Relaxed))
+                        + AMNEZIA_SESSION_IDLE_TIMEOUT =>
+            {
+                continue;
+            }
+            _ => break,
+        }
+        if amnezia::encode(&params, &mut buf) {
+            socket
+                .send_to(&buf, client)
+                .await
+                .inspect_err(|e| debug!("amnezia reply to {client} failed: {e}"))
+                .ok();
+        }
+    }
+    closed_tx.send(client).ok();
+}
+
 pub async fn handle_tls_connection(
     conn: tokio_rustls::server::TlsStream<TcpStream>,
     transport_client_addr: SocketAddr,
@@ -409,4 +579,132 @@ async fn handle_quic_connection_inner(
     debug!("stats: {:?}", connection.stats());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn params() -> amnezia::AmneziaParams {
+        amnezia::AmneziaParams {
+            init_pkt_junk_size: 40,
+            response_pkt_junk_size: 50,
+            under_load_pkt_magic_header: 1_766_607_858,
+            transport_pkt_magic_header: 2_028_465_083,
+        }
+    }
+
+    fn wg_msg(msg_type: u8, len: usize) -> BytesMut {
+        let mut msg = BytesMut::zeroed(len);
+        msg[0] = msg_type;
+        msg[4..].fill(0x5a);
+        msg
+    }
+
+    fn encoded(mut msg: BytesMut) -> BytesMut {
+        assert!(amnezia::encode(&params(), &mut msg));
+        msg
+    }
+
+    /// Starts a listener forwarding to `node`, the stand-in for the node's WireGuard socket.
+    async fn spawn_listener(node: &UdpSocket, connection_limit: Option<usize>) -> SocketAddr {
+        let socket = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listen = socket.local_addr().unwrap();
+        let options = amnezia::ServerConfig {
+            listen,
+            connection_limit,
+            params: Some(params()),
+        };
+        let fwd_cfg = ForwardConfig {
+            address: node.local_addr().unwrap(),
+        };
+        tokio::spawn(run_amnezia_listener(
+            socket,
+            CancellationToken::new(),
+            fwd_cfg,
+            options,
+        ));
+        listen
+    }
+
+    async fn connected_client(listen: SocketAddr) -> UdpSocket {
+        let client = UdpSocket::bind("[::1]:0").await.unwrap();
+        client.connect(listen).await.unwrap();
+        client
+    }
+
+    #[tokio::test]
+    async fn amnezia_listener_forwards_plain_wireguard_and_drops_junk() {
+        let node = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listen = spawn_listener(&node, None).await;
+        let client = connected_client(listen).await;
+        let mut buf = vec![0u8; 2048];
+
+        client.send(&[0xab; 57]).await.unwrap();
+        let junk = tokio::time::timeout(Duration::from_millis(200), node.recv_from(&mut buf)).await;
+        assert!(junk.is_err(), "junk must not reach the node");
+
+        client.send(&encoded(wg_msg(1, 148))).await.unwrap();
+
+        let (len, from) = node.recv_from(&mut buf).await.unwrap();
+        assert_eq!(buf[..len], wg_msg(1, 148)[..]);
+        node.send_to(&buf[..len], from).await.unwrap();
+
+        let len = client.recv(&mut buf).await.unwrap();
+        assert_eq!(len, 148 + 40);
+        assert_eq!(buf[40..44], 1u32.to_le_bytes());
+        assert_eq!(buf[44..len], wg_msg(1, 148)[4..]);
+    }
+
+    #[tokio::test]
+    async fn amnezia_listener_forwards_to_ipv4_node() {
+        let node = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let listen = spawn_listener(&node, None).await;
+        let client = connected_client(listen).await;
+        let mut buf = vec![0u8; 2048];
+
+        client.send(&encoded(wg_msg(1, 148))).await.unwrap();
+
+        let (len, from) = node.recv_from(&mut buf).await.unwrap();
+        assert!(from.is_ipv4());
+        assert_eq!(buf[..len], wg_msg(1, 148)[..]);
+    }
+
+    #[tokio::test]
+    async fn amnezia_listener_caps_sessions() {
+        let node = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listen = spawn_listener(&node, Some(1)).await;
+        let mut buf = vec![0u8; 2048];
+
+        for forwarded in [true, false] {
+            let client = connected_client(listen).await;
+            client.send(&encoded(wg_msg(1, 148))).await.unwrap();
+            let res =
+                tokio::time::timeout(Duration::from_millis(200), node.recv_from(&mut buf)).await;
+            assert_eq!(res.is_ok(), forwarded);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn amnezia_session_survives_client_only_traffic() {
+        let node = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listen = spawn_listener(&node, None).await;
+        let client = connected_client(listen).await;
+        let mut buf = vec![0u8; 2048];
+
+        // The node never replies; the session must keep its upstream socket past the idle timeout.
+        let mut upstream = None;
+        for _ in 0..3 {
+            client.send(&encoded(wg_msg(4, 64))).await.unwrap();
+            // Busy-poll so the paused clock cannot jump past the idle timeout mid-delivery.
+            let from = loop {
+                match node.try_recv_from(&mut buf) {
+                    Ok((_, from)) => break from,
+                    Err(_) => tokio::task::yield_now().await,
+                }
+            };
+            assert_eq!(*upstream.get_or_insert(from), from);
+            tokio::time::sleep(Duration::from_secs(150)).await;
+        }
+    }
 }

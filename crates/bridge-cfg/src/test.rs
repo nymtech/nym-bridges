@@ -241,6 +241,7 @@ fn adapt_existing_bridge_config() {
                 assert_eq!(cfg.listen, "[::]:8422".parse().unwrap());
                 assert_eq!(cfg.connection_limit, Some(10_000));
             }
+            TransportServerConfig::Amnezia(_) => unreachable!(),
         });
 
     let client_params_out =

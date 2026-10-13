@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::transport::{quic, ssh, tls};
+use crate::transport::{amnezia, quic, ssh, tls};
 
 // ====================================[ Server Side ]====================================
 
@@ -26,6 +26,7 @@ pub enum TransportServerConfig {
     QuicPlain(quic::ServerConfig),
     TlsPlain(tls::ServerConfig),
     SshPlain(ssh::ServerConfig),
+    Amnezia(amnezia::ServerConfig),
 }
 
 impl From<quic::ServerConfig> for TransportServerConfig {
@@ -46,6 +47,12 @@ impl From<ssh::ServerConfig> for TransportServerConfig {
     }
 }
 
+impl From<amnezia::ServerConfig> for TransportServerConfig {
+    fn from(value: amnezia::ServerConfig) -> Self {
+        TransportServerConfig::Amnezia(value)
+    }
+}
+
 impl TransportServerConfig {
     /// Socket address the transport listener binds to.
     pub fn listen_addr(&self) -> SocketAddr {
@@ -53,13 +60,14 @@ impl TransportServerConfig {
             TransportServerConfig::QuicPlain(cfg) => cfg.listen,
             TransportServerConfig::TlsPlain(cfg) => cfg.listen,
             TransportServerConfig::SshPlain(cfg) => cfg.listen,
+            TransportServerConfig::Amnezia(cfg) => cfg.listen,
         }
     }
 
     /// Network protocol used by the transport listener ("udp" or "tcp").
     pub fn listen_protocol(&self) -> &'static str {
         match self {
-            TransportServerConfig::QuicPlain(_) => "udp",
+            TransportServerConfig::QuicPlain(_) | TransportServerConfig::Amnezia(_) => "udp",
             TransportServerConfig::TlsPlain(_) | TransportServerConfig::SshPlain(_) => "tcp",
         }
     }
@@ -71,6 +79,7 @@ impl crate::types::Sufficiency for TransportServerConfig {
             TransportServerConfig::QuicPlain(cfg) => cfg.is_sufficient(),
             TransportServerConfig::TlsPlain(cfg) => cfg.is_sufficient(),
             TransportServerConfig::SshPlain(cfg) => cfg.is_sufficient(),
+            TransportServerConfig::Amnezia(cfg) => cfg.is_sufficient(),
         }
     }
 }
@@ -162,6 +171,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
             .collect();
 
         let mut transports = vec![];
+        let mut amnezia = vec![];
         for transport in &value.transports {
             match transport {
                 TransportServerConfig::QuicPlain(cfg) => {
@@ -202,11 +212,24 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                         client_banner,
                     }));
                 }
+                TransportServerConfig::Amnezia(cfg) => {
+                    let port = cfg.listen.port();
+                    let params = cfg
+                        .params
+                        .clone()
+                        .context("params must be configured for the amnezia transport")?;
+                    amnezia.push(amnezia::ClientOptions {
+                        protocol_version: crate::types::amnezia::PROTOCOL_VERSION,
+                        addresses: ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect(),
+                        params,
+                    });
+                }
             }
         }
         Ok(Self {
             version: "0".into(),
             transports,
+            amnezia,
         })
     }
 }
@@ -326,6 +349,7 @@ listen = "[::]:4422"
         let cfg = PersistedClientConfig {
             version: "v0.0.0".into(),
             transports: vec![quic_cfg1.into(), tls_cfg1.into()],
+            amnezia: vec![],
         };
 
         let serialized_cfg = toml::to_string(&cfg)?;
@@ -430,6 +454,9 @@ listen = "[::]:4422"
             ssh::ServerConfig::default()
                 .generate_config(&mut rng)
                 .into(),
+            amnezia::ServerConfig::default()
+                .generate_config(&mut rng)
+                .into(),
         ];
 
         for transport in &transports {
@@ -450,6 +477,8 @@ listen = "[::]:4422"
 
         let client_cfg = PersistedClientConfig::try_from(&server_cfg)?;
         assert_eq!(client_cfg.transports.len(), 3);
+        assert_eq!(client_cfg.amnezia.len(), 1);
+        assert!(client_cfg.amnezia.iter().all(|a| a.is_sufficient()));
 
         for transport in &client_cfg.transports {
             assert!(

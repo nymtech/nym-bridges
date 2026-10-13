@@ -99,3 +99,22 @@ listen = "[::]:4422"
 # underlying SSH library's default, copied into the generated client configuration. Used
 # for on-the-wire fingerprint management to masquerade as alternative SSH implementations.
 # client_banner = "SSH-2.0-OpenSSH_9.6"
+
+# AmneziaWG translator: accepts amneziawg-go clients and forwards plain WireGuard to `forward`.
+# [[transports]]
+# transport_type = "amnezia"
+#
+# [transports.args]
+# (UDP) Socket address to listen on
+# listen = "[::]:51830"
+#
+# Maximum number of concurrent client sessions to allow (default 10000). Each session holds one
+# socket, so keep the service file limit (`LimitNOFILE`) above this value.
+# connection_limit = 10000
+#
+# AmneziaWG parameters shared with clients. `bridge-cfg --gen` generates them when missing.
+# [transports.args.params]
+# init_pkt_junk_size = 40
+# response_pkt_junk_size = 50
+# under_load_pkt_magic_header = 123456789
+# transport_pkt_magic_header = 1623456789
