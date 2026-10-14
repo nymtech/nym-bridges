@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AmneziaWG 3.1 framing (`protocol_version = 2`): S3/S4 padding, H3/H4 ranges, header protection and trailers, served next to 1.0 on its own port
 - AmneziaWG listener runs one SO_REUSEPORT socket per core on Linux, encodes replies into headroom without copying, and adds capped random trailers to 3.1 replies
 - AmneziaWG 3.1 params with random trailers keep H3/H4 ranges at most 255 wide (wider ranges drop transport packets as false cookie replies); `bridge-cfg` generates single values
-- AmneziaWG sockets request 4 MiB receive buffers and the Debian package raises `net.core.rmem_max` to match, so long-RTT downloads no longer drop reply bursts from WireGuard
+- AmneziaWG sockets request 4 MiB receive buffers, so long-RTT downloads no longer drop reply bursts from WireGuard. Operators: the Debian package installs `/usr/lib/sysctl.d/10-nym-bridge.conf` raising `net.core.rmem_max` to 4 MiB; it never lowers a higher value, and any later sysctl file overrides it. Other installs: set `net.core.rmem_max >= 4194304` (nym-bridge warns at start when it is lower)
 
 ## [0.2.2] - 2026-09-25
 
