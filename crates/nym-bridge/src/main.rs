@@ -828,4 +828,14 @@ mod test {
 
         assert!(bind_reuse_port(listen).is_ok());
     }
+
+    // Holds on any host: Linux doubles a request capped at `rmem_max`, macOS grants it.
+    #[tokio::test]
+    async fn amnezia_listener_socket_requests_larger_receive_buffer() {
+        let plain = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listener = bind_reuse_port("[::1]:0".parse().unwrap()).unwrap();
+
+        let size = |s: &UdpSocket| socket2::SockRef::from(s).recv_buffer_size().unwrap();
+        assert!(size(&listener) > size(&plain));
+    }
 }
