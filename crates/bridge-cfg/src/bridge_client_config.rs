@@ -93,6 +93,7 @@ impl TryFrom<&BridgeConfig> for BridgeClientConfig {
                     TransportServerConfig::SshPlain(cfg) => {
                         &mut cfg.private_ed25519_identity_key_file
                     }
+                    TransportServerConfig::Amnezia(_) => continue,
                 };
                 redirect_generated_key(file, tmp.path(), &value.keys);
             }
@@ -119,6 +120,7 @@ fn transport_kind(transport: &TransportServerConfig) -> &'static str {
         TransportServerConfig::QuicPlain(_) => "quic_plain",
         TransportServerConfig::TlsPlain(_) => "tls_plain",
         TransportServerConfig::SshPlain(_) => "ssh_plain",
+        TransportServerConfig::Amnezia(_) => "amnezia",
     }
 }
 

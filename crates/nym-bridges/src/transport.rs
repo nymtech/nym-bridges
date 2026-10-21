@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::error::TransportError;
 use crate::transport::tls::certs::ServerConfigSource;
 
+pub mod amnezia;
 pub mod quic;
 pub mod ssh;
 pub mod tls;

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use nym_bridges::config::TransportServerConfig;
 use nym_bridges::transport::{ExternalizeKeyMaterial, GenerateServerConfig, GeneratedKeyMaterial};
+use nym_bridges::types::Sufficiency;
 use serde::Serialize;
 use toml_edit::{DocumentMut, value};
 use tracing::*;
@@ -168,6 +169,12 @@ impl BridgeConfig {
                         *cfg = updated;
                         self.keys.extend(generated);
                     }
+                }
+                TransportServerConfig::Amnezia(cfg) => {
+                    if overwrite || !cfg.is_sufficient() {
+                        cfg.params = None;
+                    }
+                    *cfg = std::mem::take(cfg).generate_config(&mut rng);
                 }
             }
         }
@@ -377,6 +384,15 @@ stateless_retry = false
 listen = "[::]:4433"
 "##;
 
+        const KEY_TEST_AMNEZIA: &str = r##"public_ips = ["192.168.100.3"]
+[forward]
+address = "[::1]:50001"
+[[transports]]
+transport_type = "amnezia"
+[transports.args]
+listen = "[::]:51830"
+"##;
+
         const KEY_TEST_1: &str = r##"public_ips = ["192.168.100.3"]
 [forward]
 address = "[::1]:50001"
@@ -555,6 +571,22 @@ listen = "[::]:4422"
             }
         }
 
+        #[test]
+        fn amnezia_transport_generates_params() {
+            let mut cfg = BridgeConfig::parse(KEY_TEST_AMNEZIA).unwrap();
+            cfg.generate_keys(false, &PathBuf::from("./")).unwrap();
+            assert!(cfg.keys.is_empty());
+
+            let out: nym_bridges::config::PersistedServerConfig =
+                toml::from_str(&cfg.serialize()).unwrap();
+            match &out.transports[0] {
+                TransportServerConfig::Amnezia(amnezia_cfg) => {
+                    assert!(amnezia_cfg.is_sufficient())
+                }
+                other => panic!("expected an amnezia transport, got {other:?}"),
+            }
+        }
+
         // when multiple transports each need key material, every one should get its own
         // independently generated key/file rather than sharing a single key across all of them.
         #[test]
@@ -575,7 +607,9 @@ listen = "[::]:4422"
                     TransportServerConfig::SshPlain(c) => {
                         c.private_ed25519_identity_key_file.clone().unwrap()
                     }
-                    TransportServerConfig::TlsPlain(_) => unreachable!(),
+                    TransportServerConfig::TlsPlain(_) | TransportServerConfig::Amnezia(_) => {
+                        unreachable!()
+                    }
                 })
                 .collect();
             identity_files.sort();

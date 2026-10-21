@@ -77,6 +77,10 @@ pub trait TransportAssociation {
 pub struct PersistedClientConfig {
     pub version: String,
     pub transports: Vec<ClientConfig>,
+    /// AmneziaWG translator profiles, one per protocol version the bridge serves. Clients pick a
+    /// version they speak, so old and new profiles can run side by side during upgrades.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub amnezia: Vec<amnezia::ClientOptions>,
 }
 
 impl PersistedClientConfig {
@@ -339,9 +343,92 @@ pub mod ssh {
     pub type ClientOptions = SshPlainClientOptions;
 }
 
+pub mod amnezia {
+    use crate::Sufficiency;
+    #[cfg(feature = "serde")]
+    use serde::{Deserialize, Serialize};
+    use std::net::SocketAddr;
+
+    #[cfg(feature = "typescript-bindings")]
+    use ts_rs::TS;
+
+    /// AmneziaWG 1.0 framing (S1/S2 handshake padding, H3/H4 types) with WireGuard handshake types.
+    pub const PROTOCOL_VERSION: u16 = 1;
+
+    /// Largest junk prefix amneziawg clients accept on a handshake message.
+    pub const MAX_JUNK_SIZE: u16 = 1280;
+
+    #[derive(Debug, PartialEq, Clone)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+    #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+    #[cfg_attr(
+        feature = "typescript-bindings",
+        derive(TS),
+        ts(export),
+        ts(export_to = "bindings.ts")
+    )]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    /// Handshake message types (H1/H2) stay standard: WireGuard's mac1 covers them, so a bridge in
+    /// front of plain WireGuard cannot rewrite them. Only the padding around them changes.
+    pub struct AmneziaParams {
+        /// S1 - random bytes prepended to the handshake initiation.
+        pub init_pkt_junk_size: u16,
+        /// S2 - random bytes prepended to the handshake response.
+        pub response_pkt_junk_size: u16,
+        /// H3 - message type replacing the cookie reply type.
+        pub under_load_pkt_magic_header: u32,
+        /// H4 - message type replacing the transport data type.
+        pub transport_pkt_magic_header: u32,
+    }
+
+    impl Sufficiency for AmneziaParams {
+        // H3/H4 must not collide with plain WireGuard types (1-4) or each other, and padded
+        // initiation and response must differ in size (148 + S1 != 92 + S2).
+        fn is_sufficient(&self) -> bool {
+            self.init_pkt_junk_size <= MAX_JUNK_SIZE
+                && self.response_pkt_junk_size <= MAX_JUNK_SIZE
+                && self.init_pkt_junk_size + 56 != self.response_pkt_junk_size
+                && self.under_load_pkt_magic_header > 4
+                && self.transport_pkt_magic_header > 4
+                && self.under_load_pkt_magic_header != self.transport_pkt_magic_header
+        }
+    }
+
+    #[derive(Debug, PartialEq, Clone)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+    #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+    #[cfg_attr(
+        feature = "typescript-bindings",
+        derive(TS),
+        ts(export),
+        ts(export_to = "bindings.ts")
+    )]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    pub struct AmneziaClientOptions {
+        /// Translator wire format; see [`PROTOCOL_VERSION`]. Clients skip versions they do not know.
+        pub protocol_version: u16,
+
+        /// UDP addresses of the bridge translator (IPv4/IPv6 pair of the same bridge).
+        #[cfg_attr(feature = "utoipa", schema(value_type = Vec<String>))]
+        pub addresses: Vec<SocketAddr>,
+
+        pub params: AmneziaParams,
+    }
+
+    impl Sufficiency for AmneziaClientOptions {
+        fn is_sufficient(&self) -> bool {
+            !self.addresses.is_empty() && self.params.is_sufficient()
+        }
+    }
+
+    pub type ClientOptions = AmneziaClientOptions;
+}
+
 #[cfg(test)]
 mod test {
-    use crate::{ClientConfig, PersistedClientConfig};
+    use crate::{ClientConfig, PersistedClientConfig, Sufficiency, amnezia};
 
     const RAW_V0_CLIENT_CONFIG: &str = r#"{"version":"0","transports":[{"transport_type":"quic_plain","args":{"addresses":["139.162.33.226:4443","[2400:8901::2000:faff:fea6:87f2]:4443"],"host":"netdna.bootstrapcdn.com","id_pubkey":"9JC91ZiszhIn3n4FG+MDYE/lYwhGdpHGWQTKUqGl+sE="}}]}"#;
 
@@ -384,6 +471,55 @@ mod test {
         // Verify host field
         assert_eq!(params.host, Some("netdna.bootstrapcdn.com".to_string()),);
 
+        // Descriptors from bridges without a translator carry no amnezia params
+        assert!(parsed.amnezia.is_empty());
+
         Ok(())
+    }
+
+    fn amnezia_options() -> amnezia::ClientOptions {
+        amnezia::ClientOptions {
+            protocol_version: amnezia::PROTOCOL_VERSION,
+            addresses: vec!["139.162.33.226:51830".parse().unwrap()],
+            params: amnezia::AmneziaParams {
+                init_pkt_junk_size: 40,
+                response_pkt_junk_size: 50,
+                under_load_pkt_magic_header: 1_766_607_858,
+                transport_pkt_magic_header: 2_528_465_083,
+            },
+        }
+    }
+
+    #[test]
+    fn amnezia_params_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let mut config: PersistedClientConfig = serde_json::from_str(RAW_V0_CLIENT_CONFIG)?;
+        config.amnezia = vec![amnezia_options()];
+
+        let parsed: PersistedClientConfig = serde_json::from_str(&serde_json::to_string(&config)?)?;
+
+        assert_eq!(parsed, config);
+        Ok(())
+    }
+
+    #[test]
+    fn amnezia_sufficiency() {
+        assert!(amnezia_options().is_sufficient());
+
+        let mut colliding_header = amnezia_options();
+        colliding_header.params.transport_pkt_magic_header =
+            colliding_header.params.under_load_pkt_magic_header;
+        assert!(!colliding_header.is_sufficient());
+
+        let mut plain_header = amnezia_options();
+        plain_header.params.transport_pkt_magic_header = 4;
+        assert!(!plain_header.is_sufficient());
+
+        let mut same_size = amnezia_options();
+        same_size.params.response_pkt_junk_size = same_size.params.init_pkt_junk_size + 56;
+        assert!(!same_size.is_sufficient());
+
+        let mut no_addresses = amnezia_options();
+        no_addresses.addresses.clear();
+        assert!(!no_addresses.is_sufficient());
     }
 }
