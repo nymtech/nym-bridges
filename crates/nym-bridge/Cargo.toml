@@ -16,6 +16,7 @@ anyhow.workspace = true
 bytes.workspace = true
 clap = { workspace = true, features = ["derive"] }
 quinn.workspace = true
+socket2 = { workspace = true, features = ["all"] }
 rustls = { workspace = true, default-features = false, features = [
 	"std",
 	"ring",
@@ -83,6 +84,11 @@ assets = [
     [
         "../../bridges.template.toml",
         "/usr/share/doc/nym-bridge/bridges.template.toml",
+        "644",
+    ],
+    [
+        "pkg/sysctl/10-nym-bridge.conf",
+        "/usr/lib/sysctl.d/10-nym-bridge.conf",
         "644",
     ],
     [

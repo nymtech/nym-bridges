@@ -219,7 +219,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                         .clone()
                         .context("params must be configured for the amnezia transport")?;
                     amnezia.push(amnezia::ClientOptions {
-                        protocol_version: crate::types::amnezia::PROTOCOL_VERSION,
+                        protocol_version: cfg.protocol_version,
                         addresses: ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect(),
                         params,
                     });
