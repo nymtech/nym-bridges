@@ -525,7 +525,8 @@ async fn amnezia_session(
             res = tokio::time::timeout(wait, upstream.recv_buf(&mut buf)) => res,
         };
         match res {
-            Ok(Ok(_)) => replied = true,
+            // A cookie reply (type 3) is sent before the node knows the sender is a peer.
+            Ok(Ok(_)) => replied |= buf.get(headroom).is_some_and(|&t| t != 3),
             // Once the node has answered, client traffic alone keeps the session alive.
             Err(_)
                 if replied
@@ -827,6 +828,37 @@ mod test {
         assert_ne!(
             upstreams[0], upstreams[1],
             "unanswered session must be replaced"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn amnezia_session_closes_when_node_only_sends_cookie_replies() {
+        let node = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listen = spawn_listener(&node, None).await;
+        let client = connected_client(listen).await;
+        let mut buf = vec![0u8; 2048];
+
+        // Under load the node answers any initiation with a valid mac1 with a cookie reply, before
+        // it knows whether the sender is a peer.
+        let mut upstreams = Vec::new();
+        for _ in 0..2 {
+            client.send(&encoded(wg_msg(1, 148))).await.unwrap();
+            let from = loop {
+                match node.try_recv_from(&mut buf) {
+                    Ok((_, from)) => break from,
+                    Err(_) => tokio::task::yield_now().await,
+                }
+            };
+            node.try_send_to(&wg_msg(3, 64), from).unwrap();
+            while client.try_recv(&mut buf).is_err() {
+                tokio::task::yield_now().await;
+            }
+            upstreams.push(from);
+            tokio::time::sleep(AMNEZIA_SESSION_REPLY_TIMEOUT + Duration::from_secs(1)).await;
+        }
+        assert_ne!(
+            upstreams[0], upstreams[1],
+            "a cookie reply is not an answer"
         );
     }
 
