@@ -24,7 +24,7 @@ case "$profile" in
         extra=("s1=44" "s2=52" "h1=1" "h2=2" "h3=123456789-123456889" "h4=1623456789-1623456889"
             "s3=20" "s4=16"
             "header_protection_key=0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff0"
-            "random_trailers=true") ;;
+            "random_trailers=false") ;;
     *) echo "unknown profile '$profile'" >&2; exit 2 ;;
 esac
 
