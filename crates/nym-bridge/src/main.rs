@@ -28,6 +28,9 @@ use nym_bridges::{
 
 /// WireGuard RejectAfterTime: a session silent for longer than this has no live keys left.
 const AMNEZIA_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
+/// WireGuard retries a lost initiation every 5 s: a source the node has not answered after two
+/// tries is not a peer, so spoofed sources cannot hold sessions open.
+const AMNEZIA_SESSION_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 const AMNEZIA_MAX_DATAGRAM: usize = 65535;
 /// Session cap when `connection_limit` is unset, so spoofed sources cannot exhaust sockets.
 const AMNEZIA_DEFAULT_SESSION_LIMIT: usize = 10_000;
@@ -507,21 +510,28 @@ async fn amnezia_session(
     // Headroom for the transport padding, so replies are encoded without a copy.
     let headroom = framing.transport_padding();
     let mut buf = BytesMut::new();
+    let mut replied = false;
     loop {
         buf.clear();
         buf.reserve(headroom + AMNEZIA_SESSION_BUF);
         buf.resize(headroom, 0);
+        let wait = if replied {
+            AMNEZIA_SESSION_IDLE_TIMEOUT
+        } else {
+            AMNEZIA_SESSION_REPLY_TIMEOUT
+        };
         let res = tokio::select! {
             _ = token.cancelled() => break,
-            res = tokio::time::timeout(AMNEZIA_SESSION_IDLE_TIMEOUT, upstream.recv_buf(&mut buf)) => res,
+            res = tokio::time::timeout(wait, upstream.recv_buf(&mut buf)) => res,
         };
         match res {
-            Ok(Ok(_)) => {}
-            // Client traffic alone keeps the session alive.
+            Ok(Ok(_)) => replied = true,
+            // Once the node has answered, client traffic alone keeps the session alive.
             Err(_)
-                if started.elapsed()
-                    < Duration::from_millis(last_seen.load(Ordering::Relaxed))
-                        + AMNEZIA_SESSION_IDLE_TIMEOUT =>
+                if replied
+                    && started.elapsed()
+                        < Duration::from_millis(last_seen.load(Ordering::Relaxed))
+                            + AMNEZIA_SESSION_IDLE_TIMEOUT =>
             {
                 continue;
             }
@@ -772,7 +782,8 @@ mod test {
         let client = connected_client(listen).await;
         let mut buf = vec![0u8; 2048];
 
-        // The node never replies; the session must keep its upstream socket past the idle timeout.
+        // The node answers once, then stays silent; the session must keep its upstream socket
+        // past the idle timeout.
         let mut upstream = None;
         for _ in 0..3 {
             client.send(&encoded(wg_msg(4, 64))).await.unwrap();
@@ -783,9 +794,40 @@ mod test {
                     Err(_) => tokio::task::yield_now().await,
                 }
             };
+            if upstream.is_none() {
+                node.try_send_to(&wg_msg(2, 92), from).unwrap();
+                while client.try_recv(&mut buf).is_err() {
+                    tokio::task::yield_now().await;
+                }
+            }
             assert_eq!(*upstream.get_or_insert(from), from);
             tokio::time::sleep(Duration::from_secs(150)).await;
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn amnezia_session_closes_when_node_never_replies() {
+        let node = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listen = spawn_listener(&node, None).await;
+        let client = connected_client(listen).await;
+        let mut buf = vec![0u8; 2048];
+
+        let mut upstreams = Vec::new();
+        for _ in 0..2 {
+            client.send(&encoded(wg_msg(1, 148))).await.unwrap();
+            let from = loop {
+                match node.try_recv_from(&mut buf) {
+                    Ok((_, from)) => break from,
+                    Err(_) => tokio::task::yield_now().await,
+                }
+            };
+            upstreams.push(from);
+            tokio::time::sleep(AMNEZIA_SESSION_REPLY_TIMEOUT + Duration::from_secs(1)).await;
+        }
+        assert_ne!(
+            upstreams[0], upstreams[1],
+            "unanswered session must be replaced"
+        );
     }
 
     #[tokio::test]
