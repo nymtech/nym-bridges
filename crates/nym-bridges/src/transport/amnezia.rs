@@ -93,7 +93,8 @@ impl crate::transport::GenerateServerConfig for ServerConfig {
             // Every data packet carries S4, so keep it small: the client MTU drops by S4.
             params.transport_pkt_junk_size = rng.random_range(12..=24);
             params.header_protection_key = Some(key.iter().map(|b| format!("{b:02x}")).collect());
-            params.random_trailers = true;
+            // No random trailers: amneziawg-go also pads every data packet with them, inflating
+            // the user's metered uplink by hundreds of bytes per small packet.
         }
         self.params = Some(params);
         self
@@ -541,6 +542,7 @@ mod test {
                 assert!(cfg.is_sufficient(), "{p:?}");
                 assert!(*p.transport_headers().end() <= i32::MAX as u32);
                 assert_eq!(p.is_awg_1_0(), protocol_version == PROTOCOL_AWG_1_0);
+                assert!(!p.random_trailers);
             }
         }
     }

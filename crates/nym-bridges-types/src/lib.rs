@@ -408,7 +408,8 @@ pub mod amnezia {
         #[cfg_attr(feature = "serde", serde(default))]
         #[cfg_attr(feature = "typescript-bindings", ts(optional))]
         pub header_protection_key: Option<String>,
-        /// Handshake and cookie messages may carry random trailing bytes (AmneziaWG 3.1).
+        /// Messages may carry random trailing bytes (AmneziaWG 3.1). amneziawg-go also pads every
+        /// data packet with them inside the encryption, which inflates metered traffic.
         #[cfg_attr(feature = "serde", serde(default))]
         pub random_trailers: bool,
     }
