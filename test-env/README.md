@@ -85,3 +85,24 @@ client-udp --config /etc/nym/default-nym-node/client_ssh.toml
 # in wg0 container -- open a tcp connection to kick off the layered wrapped tunnel to the netcat tcp listener on the server
 nc -vvv 10.0.1.2 9999
 ```
+
+---
+
+## AmneziaWG translator lab
+
+`./test-env/awg-lab.sh` builds the env, starts `nym-bridge` in `wg1` (QUIC, TLS, SSH, an AmneziaWG 1.0
+port on 51830 and an AmneziaWG 3.1 port on 51831, see `test-config/server.toml`) and runs, with a
+censor in `wg0` that drops vanilla WireGuard handshake initiations:
+
+0. the amneziawg-go builds under test (default: the version nym-vpn-client ships, plus v0.2.13)
+1. fallbacks: vanilla WireGuard and base mode to the plain port, old and new clients through the
+   translators, censor blocking vanilla and base mode
+2. header, padding and decryption format on the wire (1.0 and 3.1 header protection)
+3. datagram collisions: transport packets at padded handshake sizes
+4. MTU: DF pings at the tunnel MTU, no IP fragments
+5. benchmarks: iperf3 and RTT per path
+6. QUIC, TLS and SSH bridges through the censor, translator speed gated against the QUIC bridge
+7. SNI and hostnames visible on the wire
+
+About 4 minutes once the image is built (first build about 10 minutes). Override versions with
+`AWG_VERSION=... AWG_LEGACY_VERSION=... ./test-env/awg-lab.sh`.
