@@ -227,7 +227,7 @@ pub async fn transport_conn(
     }
 }
 
-async fn connect_one(
+pub(crate) async fn connect_one(
     addr: SocketAddr,
     #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: &impl Fn(RawFd),
 ) -> Result<TcpStream, TransportError> {

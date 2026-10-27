@@ -148,7 +148,12 @@ impl BridgeConn {
                     TransportError::config_err("no ssh bridge address configured")
                 })?;
                 let stream = token
-                    .run_until_cancelled(ssh::transport_conn(opts, connect_timeout))
+                    .run_until_cancelled(ssh::transport_conn(
+                        opts,
+                        #[cfg(any(target_os = "linux", target_os = "android"))]
+                        on_socket_open,
+                        connect_timeout,
+                    ))
                     .await
                     .ok_or(TransportError::Cancelled)??;
                 let (reader, writer) = tokio::io::split(stream);
