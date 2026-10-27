@@ -122,6 +122,7 @@ impl PersistedServerConfig {
 
 // ====================================[ Client Side ]====================================
 
+use crate::types::TransportAssociation;
 pub use crate::types::{ClientConfig, PersistedClientConfig};
 
 pub fn parse_persisted_config_json(config_str: impl AsRef<str>) -> Result<PersistedClientConfig> {
@@ -204,9 +205,16 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                 }
             }
         }
+        // Released apps parse `transports` strictly and only know QUIC.
+        let quic_only = transports
+            .iter()
+            .filter(|t| t.transport_name() == crate::types::quic::TRANSPORT_NAME)
+            .cloned()
+            .collect();
         Ok(Self {
             version: "0".into(),
-            transports,
+            transports: quic_only,
+            transports_v2: transports,
         })
     }
 }
@@ -325,12 +333,17 @@ listen = "[::]:4422"
 
         let cfg = PersistedClientConfig {
             version: "v0.0.0".into(),
-            transports: vec![quic_cfg1.into(), tls_cfg1.into()],
+            transports: vec![quic_cfg1.clone().into()],
+            transports_v2: vec![quic_cfg1.into(), tls_cfg1.into()],
         };
 
         let serialized_cfg = toml::to_string(&cfg)?;
+        // A transport type this build does not know is dropped, not fatal.
+        let with_unknown = format!(
+            "{serialized_cfg}\n[[transports_v2]]\ntransport_type = \"future_plain\"\n\n[transports_v2.args]\nanything = 1\n"
+        );
 
-        let parsed_cfg = parse_persisted_config(serialized_cfg)?;
+        let parsed_cfg = parse_persisted_config(with_unknown)?;
 
         assert_eq!(cfg, parsed_cfg);
         Ok(())
@@ -401,7 +414,9 @@ listen = "[::]:4422"
             client_banner: Some("SSH-2.0-OpenSSH_9.6".into()),
         };
 
-        for transport in client_config.transports {
+        assert_eq!(client_config.transports, vec![expected_quic.clone().into()]);
+        assert_eq!(client_config.transports_v2.len(), 3);
+        for transport in client_config.transports_v2 {
             match transport {
                 ClientConfig::QuicPlain(cc) => assert_eq!(cc, expected_quic),
                 ClientConfig::TlsPlain(cc) => assert_eq!(cc, expected_tls),
@@ -449,9 +464,9 @@ listen = "[::]:4422"
         };
 
         let client_cfg = PersistedClientConfig::try_from(&server_cfg)?;
-        assert_eq!(client_cfg.transports.len(), 3);
+        assert_eq!(client_cfg.transports_v2.len(), 3);
 
-        for transport in &client_cfg.transports {
+        for transport in &client_cfg.transports_v2 {
             assert!(
                 transport.is_sufficient(),
                 "client config derived from a generated server config should be sufficient, got {transport:?}"

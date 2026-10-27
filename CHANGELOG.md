@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `transports_v2` in the client bridge descriptor lists every transport (QUIC, TLS, SSH, and later ones). Both lists drop transport types the client does not know instead of failing
+
+### Changed (breaking)
+
+- `transports` in the client bridge descriptor now carries QUIC only, because released apps up to 2026.12 fail the whole gateway list on any other transport type. Clients read `PersistedClientConfig::advertised()` (falls back to `transports` for older bridges)
+- `PersistedClientConfig` has a new field, `transports_v2`; code constructing it needs to set it
+- Operators: upgrade from 0.2.2 to this release before enabling TLS or SSH; 0.2.2 advertises them in `transports`, which breaks apps up to 2026.12
+
 ## [0.2.2] - 2026-09-25
 
 

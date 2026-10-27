@@ -97,9 +97,9 @@ fn create_fresh_bridge_config() -> Result<()> {
     use nym_bridges::types::Sufficiency;
     let client_params_out =
         parse_persisted_config_json(bridge_client_cfg.serialize().unwrap()).unwrap();
-    assert_eq!(client_params_out.transports.len(), 3);
+    assert_eq!(client_params_out.transports_v2.len(), 3);
     client_params_out
-        .transports
+        .transports_v2
         .iter()
         .for_each(|transport| match transport {
             ClientConfig::QuicPlain(cfg) => {
@@ -347,8 +347,8 @@ fn adapt_config_generates_keys_for_every_transport_kind() {
 
     let client_params_out =
         parse_persisted_config_json(bridge_client_cfg.serialize().unwrap()).unwrap();
-    assert_eq!(client_params_out.transports.len(), 3);
-    for transport in &client_params_out.transports {
+    assert_eq!(client_params_out.transports_v2.len(), 3);
+    for transport in &client_params_out.transports_v2 {
         assert!(
             transport.is_sufficient(),
             "derived client config {transport:?} should be sufficient"
