@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `transports_v2` in the client bridge descriptor lists every transport (QUIC, TLS, SSH, and later ones). Both lists drop transport types the client does not know instead of failing
 
+### Fixed
+
+- SSH bridge sockets now go through `on_socket_open` like QUIC and TLS, so Linux and Android clients mark (fwmark) or bypass them instead of routing them into the tunnel
+
 ### Changed (breaking)
 
 - `transports` in the client bridge descriptor now carries QUIC only, because released apps up to 2026.12 fail the whole gateway list on any other transport type. Clients read `PersistedClientConfig::advertised()` (falls back to `transports` for older bridges)

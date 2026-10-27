@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::os::fd::RawFd;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use base64::prelude::*;
@@ -713,6 +715,7 @@ fn build_client_config(client_banner: Option<String>) -> russh::client::Config {
 /// returns [`TransportError::TimedOut`].
 pub async fn transport_conn(
     options: &ClientOptions,
+    #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: impl Fn(RawFd),
     connect_timeout: Duration,
 ) -> Result<ClientChannelStream> {
     info!("initializing from transport identity pubkey");
@@ -731,10 +734,14 @@ pub async fn transport_conn(
     };
 
     let connect = async {
-        let attempts = inner_options
-            .addresses
-            .iter()
-            .map(|&addr| Box::pin(TcpStream::connect(addr)));
+        let attempts = inner_options.addresses.iter().map(|&addr| {
+            // Same socket setup as TLS, so the socket is marked or bypassed before it connects.
+            Box::pin(crate::transport::tcp::connect_one(
+                addr,
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                &on_socket_open,
+            ))
+        });
 
         let (stream, _losing_attempts) = future::select_ok(attempts).await.inspect_err(|e| {
             warn!(
