@@ -35,7 +35,7 @@
 //! let shutdown_token = CancellationToken::new();
 //! let entry_bridge_params = parse_persisted_config_json(client_config_str)?;
 //! let transport_params = entry_bridge_params
-//!     .transports
+//!     .advertised()
 //!     .first()
 //!     .ok_or(anyhow!("no config provided"))?;
 //!
