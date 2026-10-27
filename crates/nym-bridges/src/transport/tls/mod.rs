@@ -1,5 +1,5 @@
 #[cfg(any(target_os = "linux", target_os = "android"))]
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::RawFd;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use base64::Engine;
@@ -8,7 +8,7 @@ use ed25519_dalek::VerifyingKey;
 use futures::future;
 use rustls::pki_types::ServerName;
 use serde::{Deserialize, Serialize};
-use tokio::net::{TcpSocket, TcpStream};
+use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::*;
 
@@ -197,7 +197,7 @@ pub async fn transport_conn(
     let sni = ServerName::try_from(host).unwrap();
 
     let attempts = inner_options.addresses.iter().map(|&addr| {
-        Box::pin(connect_one(
+        Box::pin(crate::transport::tcp::connect_one(
             addr,
             #[cfg(any(target_os = "linux", target_os = "android"))]
             &on_socket_open,
@@ -225,22 +225,6 @@ pub async fn transport_conn(
             Err(TransportError::TimedOut(connect_timeout))
         }
     }
-}
-
-pub(crate) async fn connect_one(
-    addr: SocketAddr,
-    #[cfg(any(target_os = "linux", target_os = "android"))] on_socket_open: &impl Fn(RawFd),
-) -> Result<TcpStream, TransportError> {
-    let socket = if addr.is_ipv4() {
-        TcpSocket::new_v4()
-    } else {
-        TcpSocket::new_v6()
-    }
-    .map_err(TransportError::SocketIo)?;
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    on_socket_open(socket.as_raw_fd());
-
-    socket.connect(addr).await.map_err(TransportError::SocketIo)
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use crate::transport::tls::certs::ServerConfigSource;
 
 pub mod quic;
 pub mod ssh;
+mod tcp;
 pub mod tls;
 
 /// Implemented by each transport's `ServerConfig` to fill in any key material it's still missing,

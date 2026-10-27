@@ -736,7 +736,7 @@ pub async fn transport_conn(
     let connect = async {
         let attempts = inner_options.addresses.iter().map(|&addr| {
             // Same socket setup as TLS, so the socket is marked or bypassed before it connects.
-            Box::pin(crate::transport::tls::connect_one(
+            Box::pin(crate::transport::tcp::connect_one(
                 addr,
                 #[cfg(any(target_os = "linux", target_os = "android"))]
                 &on_socket_open,
