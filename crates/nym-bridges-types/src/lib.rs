@@ -76,13 +76,52 @@ pub trait TransportAssociation {
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub struct PersistedClientConfig {
     pub version: String,
+    /// QUIC only: apps up to 2026.12 fail the whole gateway list on any other transport type.
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "known_transports"))]
     pub transports: Vec<ClientConfig>,
+    /// Every advertised transport. New transport types are only added here; clients drop types
+    /// they do not know.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, deserialize_with = "known_transports")
+    )]
+    pub transports_v2: Vec<ClientConfig>,
+}
+
+/// Drops transport types this build does not know instead of failing the whole list.
+#[cfg(feature = "serde")]
+fn known_transports<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<ClientConfig>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Known(ClientConfig),
+        Unknown(serde::de::IgnoredAny),
+    }
+    let entries = Vec::<Entry>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Known(transport) => Some(transport),
+            Entry::Unknown(_) => None,
+        })
+        .collect())
 }
 
 impl PersistedClientConfig {
+    /// `transports_v2`, or the QUIC-only `transports` from bridges that predate it.
+    pub fn advertised(&self) -> &[ClientConfig] {
+        if self.transports_v2.is_empty() {
+            &self.transports
+        } else {
+            &self.transports_v2
+        }
+    }
+
     pub fn get_addrs(&self) -> Vec<BridgeSocketAddr> {
         let mut addrs = Vec::new();
-        for transport in &self.transports {
+        for transport in self.advertised() {
             match transport {
                 ClientConfig::QuicPlain(params) => addrs.extend(&params.addresses),
                 ClientConfig::TlsPlain(params) => addrs.extend(&params.addresses),
@@ -96,7 +135,7 @@ impl PersistedClientConfig {
     /// in the order they were listed. A caller wanting to dial "any advertised
     /// transport" should try these in order rather than assuming a single one.
     pub fn usable_transports(&self) -> impl Iterator<Item = &ClientConfig> {
-        self.transports.iter().filter(|t| t.is_sufficient())
+        self.advertised().iter().filter(|t| t.is_sufficient())
     }
 }
 
@@ -384,6 +423,64 @@ mod test {
         // Verify host field
         assert_eq!(params.host, Some("netdna.bootstrapcdn.com".to_string()),);
 
+        Ok(())
+    }
+
+    const QUIC: &str = r#"{"transport_type":"quic_plain","args":{"addresses":["1.2.3.4:4443"],"host":null,"id_pubkey":"pin"}}"#;
+    const TLS: &str = r#"{"transport_type":"tls_plain","args":{"addresses":["1.2.3.4:443"],"host":null,"id_pubkey":"pin"}}"#;
+    const SSH: &str = r#"{"transport_type":"ssh_plain","args":{"addresses":["1.2.3.4:22"],"id_pubkey":"pin","username":null,"client_auth_key":"key","client_banner":null}}"#;
+    const FUTURE: &str = r#"{"transport_type":"future_plain","args":{"anything":1}}"#;
+
+    fn descriptor() -> String {
+        format!(
+            r#"{{"version":"0","transports":[{QUIC}],"transports_v2":[{QUIC},{TLS},{SSH},{FUTURE}]}}"#
+        )
+    }
+
+    #[test]
+    fn transports_v2_drops_unknown_types() -> Result<(), serde_json::Error> {
+        let parsed: PersistedClientConfig = serde_json::from_str(&descriptor())?;
+
+        assert_eq!(parsed.transports.len(), 1);
+        assert_eq!(parsed.transports_v2.len(), 3);
+        assert_eq!(parsed.advertised().len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn advertised_falls_back_to_quic_list_without_transports_v2() -> Result<(), serde_json::Error> {
+        let parsed: PersistedClientConfig = serde_json::from_str(RAW_V0_CLIENT_CONFIG)?;
+
+        assert!(parsed.transports_v2.is_empty());
+        assert_eq!(parsed.advertised(), parsed.transports);
+        Ok(())
+    }
+
+    /// Released apps parse `transports` strictly and ignore unknown fields, so a descriptor with
+    /// TLS, SSH and a future type in `transports_v2` must still parse for them.
+    #[test]
+    fn released_clients_parse_new_descriptor() -> Result<(), serde_json::Error> {
+        // Apps up to 2026.12: a local enum that only knows quic_plain.
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "transport_type", content = "args", rename_all = "snake_case")]
+        #[allow(dead_code)]
+        enum QuicOnly {
+            QuicPlain(serde_json::Value),
+        }
+        #[derive(serde::Deserialize)]
+        struct Until2026_12 {
+            #[allow(dead_code)]
+            transports: Vec<QuicOnly>,
+        }
+        // Apps from 2026.13: nym-bridges 0.2.1, a strict list and no transports_v2.
+        #[derive(serde::Deserialize)]
+        struct From2026_13 {
+            #[allow(dead_code)]
+            transports: Vec<ClientConfig>,
+        }
+
+        serde_json::from_str::<Until2026_12>(&descriptor())?;
+        serde_json::from_str::<From2026_13>(&descriptor())?;
         Ok(())
     }
 }

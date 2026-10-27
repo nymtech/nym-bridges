@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `transports_v2` in the client bridge descriptor lists every transport (QUIC, TLS, SSH, and later ones); `transports` now carries QUIC only, because released apps up to 2026.12 fail the whole gateway list on any other transport type. Both lists drop transport types the client does not know instead of failing
+
 ## [0.2.2] - 2026-09-25
 
 
