@@ -456,18 +456,33 @@ mod test {
         Ok(())
     }
 
-    /// Unknown types in either list and malformed known entries are dropped, not fatal; a v2 list
-    /// left empty that way falls back to the QUIC list.
+    /// Unknown types in either list and malformed known entries (missing field, wrong type, not an
+    /// object) are dropped, not fatal; a v2 list left empty that way falls back to the QUIC list.
     #[test]
     fn transports_drop_unknown_and_malformed_entries() -> Result<(), serde_json::Error> {
-        let malformed_quic = r#"{"transport_type":"quic_plain","args":{"addresses":[]}}"#;
+        let missing_field = r#"{"transport_type":"quic_plain","args":{"addresses":[]}}"#;
+        let wrong_type = r#"{"transport_type":"tls_plain","args":{"addresses":"1.2.3.4:443","id_pubkey":"pin"}}"#;
         let parsed: PersistedClientConfig = serde_json::from_str(&format!(
-            r#"{{"version":"0","transports":[{FUTURE},{QUIC}],"transports_v2":[{FUTURE},{malformed_quic}]}}"#
+            r#"{{"version":"0","transports":[{FUTURE},{QUIC}],"transports_v2":[{FUTURE},{missing_field},{wrong_type},42]}}"#
         ))?;
 
         assert_eq!(parsed.transports.len(), 1);
         assert!(parsed.transports_v2.is_empty());
         assert_eq!(parsed.advertised(), parsed.transports);
+        Ok(())
+    }
+
+    /// A well-formed but unusable entry (blank identity pin) parses, and `usable_transports`
+    /// leaves it out.
+    #[test]
+    fn unusable_entries_parse_but_are_not_usable() -> Result<(), serde_json::Error> {
+        let blank_pin = r#"{"transport_type":"tls_plain","args":{"addresses":["1.2.3.4:443"],"host":null,"id_pubkey":""}}"#;
+        let parsed: PersistedClientConfig = serde_json::from_str(&format!(
+            r#"{{"version":"0","transports":[{QUIC}],"transports_v2":[{QUIC},{blank_pin}]}}"#
+        ))?;
+
+        assert_eq!(parsed.advertised().len(), 2);
+        assert_eq!(parsed.usable_transports().count(), 1);
         Ok(())
     }
 
