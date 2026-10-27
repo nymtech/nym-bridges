@@ -338,8 +338,12 @@ listen = "[::]:4422"
         };
 
         let serialized_cfg = toml::to_string(&cfg)?;
+        // A transport type this build does not know is dropped, not fatal.
+        let with_unknown = format!(
+            "{serialized_cfg}\n[[transports_v2]]\ntransport_type = \"future_plain\"\n\n[transports_v2.args]\nanything = 1\n"
+        );
 
-        let parsed_cfg = parse_persisted_config(serialized_cfg)?;
+        let parsed_cfg = parse_persisted_config(with_unknown)?;
 
         assert_eq!(cfg, parsed_cfg);
         Ok(())

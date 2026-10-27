@@ -103,7 +103,7 @@ async fn launch_listener(token: CancellationToken, opt: ServiceConfig, parallel:
 
     // When `parallel` is set every configured transport is raced in `process` below; otherwise
     // only the first configured transport is ever used.
-    let transports = Arc::new(opt.transport_cfg.transports);
+    let transports = Arc::new(opt.transport_cfg.advertised().to_vec());
     loop {
         tokio::select! {
             // Use the provided token to listen to cancellation requests

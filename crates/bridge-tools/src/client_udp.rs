@@ -136,7 +136,7 @@ async fn handle_session(
     socket: Arc<UdpSocket>,
     parallel: bool,
 ) {
-    let transports = opt.transport_cfg.transports.clone();
+    let transports = opt.transport_cfg.advertised().to_vec();
     let remote = SocketAddr::new("0.0.0.0".parse().unwrap(), 0);
     let session = Session::new(&src, &remote);
 
