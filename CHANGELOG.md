@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0-rc.2] - 2026-10-28
+## [0.3.0-rc.3] - 2026-10-28
 
 ### Added
 
@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Operators: upgrade from 0.2.2 to this release before enabling TLS or SSH; 0.2.2 advertises them in `transports`, which breaks apps up to 2026.12
 - Update uniffi to 0.32.2 (https://github.com/nymtech/nym-bridges/pull/96); the client must use the same uniffi version
 - Update dependencies and fix manifest lints (https://github.com/nymtech/nym-bridges/pull/99)
+- Keep `utoipa` on 5.x: 6.0 changes the `ToSchema` trait that `nym-bridges-types` implements, which breaks consumers still on utoipa 5 (node-status-api)
 
 ## [0.2.2] - 2026-09-25
 
