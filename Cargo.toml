@@ -92,7 +92,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 ] }
 ts-rs = "12.0.1"
 uniffi = { version = "0.32.2", features = ["cli"] }
-utoipa = "5.2"
+utoipa = "6.0"
 uuid = "1.26"
 x509-parser = { version = "0.18", features = ["verify"] }
 webpki-roots = "1.0"
