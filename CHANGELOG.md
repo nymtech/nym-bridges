@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PersistedClientConfig` has a new field, `transports_v2`; code constructing it needs to set it
 - Operators: upgrade from 0.2.2 to this release before enabling TLS or SSH; 0.2.2 advertises them in `transports`, which breaks apps up to 2026.12
 - Update uniffi to 0.32.2 (https://github.com/nymtech/nym-bridges/pull/96); the client must use the same uniffi version
+- Update dependencies and fix manifest lints (https://github.com/nymtech/nym-bridges/pull/99)
 
 ## [0.2.2] - 2026-09-25
 

@@ -7,9 +7,9 @@ version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -20,14 +20,14 @@ typescript-bindings = ["dep:ts-rs", "serde"]
 serde = ["dep:serde"]
 utoipa = ["dep:utoipa"]
 
+[lints]
+workspace = true
+
 [dependencies]
 serde = { workspace = true, features = ["derive", "rc"], optional = true }
 ts-rs = { workspace = true, optional = true }
 uniffi = { workspace = true, optional = true }
 utoipa = { workspace = true, features = ["axum_extras", "time"], optional=true }
-
-[build-dependencies]
-uniffi = { workspace = true, features = ["build"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
