@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-27
+
 ### Added
 
 - `transports_v2` in the client bridge descriptor lists every transport (QUIC, TLS, SSH, and later ones). Both lists drop transport types the client does not know instead of failing
