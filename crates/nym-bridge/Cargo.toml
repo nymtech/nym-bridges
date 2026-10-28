@@ -7,9 +7,12 @@ version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow.workspace = true
@@ -39,7 +42,7 @@ tracing-subscriber = { workspace = true, default-features = false, features = [
 
 nym-bridges = { path = "../nym-bridges" }
 
-nym-bin-common = "1.21.4"
+nym-bin-common = "2.0.0"
 
 # ------------------------------------------------------------------------------
 # START DEBIAN PACKAGING

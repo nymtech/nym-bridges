@@ -295,7 +295,7 @@ impl russh::server::Handler for ConnectionHandler {
     async fn auth_publickey(
         &mut self,
         user: &str,
-        public_key: &ssh_key::PublicKey,
+        key: russh::server::VerifiedPublicKey<'_>,
     ) -> std::result::Result<russh::server::Auth, Self::Error> {
         if user != self.expected_username {
             warn!(
@@ -305,7 +305,7 @@ impl russh::server::Handler for ConnectionHandler {
             );
             return Err(russh::Error::Disconnect);
         }
-        if !self.key_matches(public_key) {
+        if !self.key_matches(key.public_key) {
             warn!(
                 peer = %self.peer_addr,
                 user,
