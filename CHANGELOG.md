@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-rc.1] - 2026-10-28
+
 ### Added
 
 - `transports_v2` in the client bridge descriptor lists every transport (QUIC, TLS, SSH, and later ones). Both lists drop transport types the client does not know instead of failing
@@ -21,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `transports` in the client bridge descriptor now carries QUIC only, because released apps up to 2026.12 fail the whole gateway list on any other transport type. Clients read `PersistedClientConfig::advertised()` (falls back to `transports` for older bridges)
 - `PersistedClientConfig` has a new field, `transports_v2`; code constructing it needs to set it
 - Operators: upgrade from 0.2.2 to this release before enabling TLS or SSH; 0.2.2 advertises them in `transports`, which breaks apps up to 2026.12
+- Update uniffi to 0.32.2 (https://github.com/nymtech/nym-bridges/pull/96); the client must use the same uniffi version
+- Update dependencies and fix manifest lints (https://github.com/nymtech/nym-bridges/pull/99)
+- Keep `utoipa` on 5.x: 6.0 changes the `ToSchema` trait that `nym-bridges-types` implements, which breaks consumers still on utoipa 5 (node-status-api)
 
 ## [0.2.2] - 2026-09-25
 
