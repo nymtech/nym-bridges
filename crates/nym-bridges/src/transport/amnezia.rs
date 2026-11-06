@@ -513,6 +513,106 @@ mod test {
         assert_eq!(misread, 0);
     }
 
+    /// The parameter shapes a gateway generated for real (padding, single header values, header
+    /// protection); the key is made up.
+    fn generated_1_0() -> AmneziaParams {
+        AmneziaParams {
+            init_pkt_junk_size: 107,
+            response_pkt_junk_size: 57,
+            under_load_pkt_magic_header: 71_785_993,
+            transport_pkt_magic_header: 1_194_888_108,
+            ..awg_1_0()
+        }
+    }
+
+    fn generated_3_1() -> AmneziaParams {
+        AmneziaParams {
+            init_pkt_junk_size: 91,
+            response_pkt_junk_size: 112,
+            cookie_pkt_junk_size: 57,
+            transport_pkt_junk_size: 13,
+            under_load_pkt_magic_header: 437_924_652,
+            transport_pkt_magic_header: 1_421_247_452,
+            under_load_pkt_magic_header_max: None,
+            transport_pkt_magic_header_max: None,
+            random_trailers: false,
+            ..awg_3_1()
+        }
+    }
+
+    /// Small deterministic generator, so the test never flakes.
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn fill(&mut self, buf: &mut [u8]) {
+            for byte in buf {
+                self.0 ^= self.0 << 13;
+                self.0 ^= self.0 >> 7;
+                self.0 ^= self.0 << 17;
+                *byte = (self.0 >> 24) as u8;
+            }
+        }
+    }
+
+    /// amneziawg-go junk is fully random bytes of any length in [jmin, jmax). Whatever length the
+    /// client picks, a junk datagram must be dropped, never read as a handshake or transport data.
+    /// The chance that random bytes match a message is about 2^-32 per datagram (a 4 byte header
+    /// match), and a datagram that did match would still be rejected by WireGuard behind it.
+    #[test]
+    fn random_junk_of_any_length_is_dropped() {
+        let mut rng = Xorshift(0x9E37_79B9_7F4A_7C15);
+        for params in [generated_1_0(), generated_3_1()] {
+            let framing = framing(&params);
+            for len in 1..=1500 {
+                for _ in 0..64 {
+                    let mut junk = vec![0u8; len];
+                    rng.fill(&mut junk);
+                    assert_eq!(
+                        framing.decode(&mut junk),
+                        None,
+                        "junk of {len} bytes decoded"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The initiation is recognised on its own, wherever it sits in a burst of junk: junk before it
+    /// neither hides it nor is decoded.
+    #[test]
+    fn initiation_is_found_inside_a_burst_of_junk() {
+        let mut rng = Xorshift(0x1234_5678_9ABC_DEF1);
+        for params in [generated_1_0(), generated_3_1()] {
+            let framing = framing(&params);
+            let plain = wg_msg(INIT_TYPE, INIT_SIZE);
+            for position in 0..=8 {
+                let mut burst: Vec<Vec<u8>> = (0..8)
+                    .map(|i| {
+                        let mut junk = vec![0u8; 40 + (i * 37) % 330];
+                        rng.fill(&mut junk);
+                        junk
+                    })
+                    .collect();
+                let mut wire = plain.clone();
+                assert!(framing.encode(&mut wire, 0));
+                burst.insert(position, wire.to_vec());
+
+                let decoded: Vec<_> = burst
+                    .iter_mut()
+                    .filter_map(|datagram| {
+                        let range = framing.decode(datagram)?;
+                        Some(datagram[range].to_vec())
+                    })
+                    .collect();
+                assert_eq!(
+                    decoded,
+                    vec![plain.to_vec()],
+                    "initiation at position {position}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn junk_and_plain_wireguard_are_dropped() {
         for params in [awg_1_0(), awg_3_1()] {
