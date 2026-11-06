@@ -16,8 +16,10 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+bytes.workspace = true
 clap = { workspace = true, features = ["derive"] }
 quinn.workspace = true
+socket2 = { workspace = true, features = ["all"] }
 rustls = { workspace = true, default-features = false, features = [
 	"std",
 	"ring",
@@ -43,6 +45,9 @@ tracing-subscriber = { workspace = true, default-features = false, features = [
 nym-bridges = { path = "../nym-bridges" }
 
 nym-bin-common = "2.0.0"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 # ------------------------------------------------------------------------------
 # START DEBIAN PACKAGING
@@ -82,6 +87,11 @@ assets = [
     [
         "../../bridges.template.toml",
         "/usr/share/doc/nym-bridge/bridges.template.toml",
+        "644",
+    ],
+    [
+        "pkg/sysctl/10-nym-bridge.conf",
+        "/usr/lib/sysctl.d/10-nym-bridge.conf",
         "644",
     ],
     [
