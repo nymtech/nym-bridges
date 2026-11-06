@@ -126,6 +126,7 @@ impl PersistedClientConfig {
                 ClientConfig::QuicPlain(params) => addrs.extend(&params.addresses),
                 ClientConfig::TlsPlain(params) => addrs.extend(&params.addresses),
                 ClientConfig::SshPlain(params) => addrs.extend(&params.addresses),
+                ClientConfig::Amnezia(params) => addrs.extend(&params.addresses),
             }
         }
         addrs
@@ -136,6 +137,14 @@ impl PersistedClientConfig {
     /// transport" should try these in order rather than assuming a single one.
     pub fn usable_transports(&self) -> impl Iterator<Item = &ClientConfig> {
         self.advertised().iter().filter(|t| t.is_sufficient())
+    }
+
+    /// The usable AmneziaWG profiles, one per protocol version the bridge serves.
+    pub fn amnezia_profiles(&self) -> impl Iterator<Item = &amnezia::ClientOptions> {
+        self.usable_transports().filter_map(|t| match t {
+            ClientConfig::Amnezia(options) => Some(options),
+            _ => None,
+        })
     }
 }
 
@@ -155,6 +164,9 @@ pub enum ClientConfig {
     QuicPlain(quic::ClientOptions),
     TlsPlain(tls::ClientOptions),
     SshPlain(ssh::ClientOptions),
+    /// AmneziaWG translator profile, one entry per protocol version the bridge serves. Dialed as
+    /// plain UDP to the gateway, not through a local bridge socket.
+    Amnezia(amnezia::ClientOptions),
 }
 
 impl From<quic::ClientOptions> for ClientConfig {
@@ -176,6 +188,7 @@ impl ClientConfig {
             ClientConfig::QuicPlain(o) => &o.addresses,
             ClientConfig::TlsPlain(o) => &o.addresses,
             ClientConfig::SshPlain(o) => &o.addresses,
+            ClientConfig::Amnezia(o) => &o.addresses,
         }
     }
 }
@@ -186,6 +199,7 @@ impl Sufficiency for ClientConfig {
             ClientConfig::QuicPlain(o) => o.is_sufficient(),
             ClientConfig::TlsPlain(o) => o.is_sufficient(),
             ClientConfig::SshPlain(o) => o.is_sufficient(),
+            ClientConfig::Amnezia(o) => o.is_sufficient(),
         }
     }
 }
@@ -196,6 +210,7 @@ impl TransportAssociation for ClientConfig {
             ClientConfig::QuicPlain(o) => o.transport_name(),
             ClientConfig::TlsPlain(o) => o.transport_name(),
             ClientConfig::SshPlain(o) => o.transport_name(),
+            ClientConfig::Amnezia(o) => o.transport_name(),
         }
     }
 }
@@ -203,6 +218,12 @@ impl TransportAssociation for ClientConfig {
 impl From<ssh::ClientOptions> for ClientConfig {
     fn from(value: ssh::ClientOptions) -> Self {
         ClientConfig::SshPlain(value)
+    }
+}
+
+impl From<amnezia::ClientOptions> for ClientConfig {
+    fn from(value: amnezia::ClientOptions) -> Self {
+        ClientConfig::Amnezia(value)
     }
 }
 
@@ -378,9 +399,181 @@ pub mod ssh {
     pub type ClientOptions = SshPlainClientOptions;
 }
 
+pub mod amnezia {
+    use crate::{Sufficiency, TransportAssociation};
+    #[cfg(feature = "serde")]
+    use serde::{Deserialize, Serialize};
+    use std::{net::SocketAddr, ops::RangeInclusive};
+
+    #[cfg(feature = "typescript-bindings")]
+    use ts_rs::TS;
+
+    pub const TRANSPORT_NAME: &str = "amnezia";
+
+    /// AmneziaWG 1.0 framing: S1/S2 handshake padding, fixed H3/H4.
+    pub const PROTOCOL_AWG_1_0: u16 = 1;
+    /// AmneziaWG 3.1 framing: adds S3/S4 padding, H3/H4 ranges, header protection and trailers.
+    pub const PROTOCOL_AWG_3_1: u16 = 2;
+
+    /// Largest junk prefix amneziawg clients accept on a handshake message.
+    pub const MAX_JUNK_SIZE: u16 = 1280;
+    /// S4 cap: every data packet carries it, and mobile clients keep only 60 bytes of MTU headroom.
+    pub const MAX_TRANSPORT_JUNK_SIZE: u16 = 32;
+    /// Widest H3/H4 range allowed with random trailers. A receiver accepts any datagram longer than
+    /// a padded cookie reply as a possible cookie, so a transport packet is misread with odds of
+    /// range width / 2^32; 255 keeps that below one in 16 million.
+    pub const MAX_HEADER_RANGE_WITH_TRAILERS: u32 = 255;
+    /// Header protection takes its ChaCha20 nonce from the first padding bytes of a datagram.
+    pub const HEADER_PROTECTION_NONCE_SIZE: u16 = 12;
+
+    #[derive(Debug, PartialEq, Clone)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+    #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+    #[cfg_attr(
+        feature = "typescript-bindings",
+        derive(TS),
+        ts(export),
+        ts(export_to = "bindings.ts")
+    )]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    /// Handshake message types (H1/H2) stay standard: WireGuard's mac1 covers them, so a bridge in
+    /// front of plain WireGuard cannot rewrite them. Only the padding around them changes.
+    pub struct AmneziaParams {
+        /// S1 - random bytes prepended to the handshake initiation.
+        pub init_pkt_junk_size: u16,
+        /// S2 - random bytes prepended to the handshake response.
+        pub response_pkt_junk_size: u16,
+        /// H3 - message type replacing the cookie reply type (lower end of the range).
+        pub under_load_pkt_magic_header: u32,
+        /// H4 - message type replacing the transport data type (lower end of the range).
+        pub transport_pkt_magic_header: u32,
+        /// S3 - random bytes prepended to the cookie reply (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        pub cookie_pkt_junk_size: u16,
+        /// S4 - random bytes prepended to every transport packet (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        pub transport_pkt_junk_size: u16,
+        /// Upper end of the H3 range, H3 when absent (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "typescript-bindings", ts(optional))]
+        pub under_load_pkt_magic_header_max: Option<u32>,
+        /// Upper end of the H4 range, H4 when absent (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "typescript-bindings", ts(optional))]
+        pub transport_pkt_magic_header_max: Option<u32>,
+        /// Hex encoded 32 byte ChaCha20 key masking every message header (AmneziaWG 3.1).
+        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "typescript-bindings", ts(optional))]
+        pub header_protection_key: Option<String>,
+        /// Messages may carry random trailing bytes (AmneziaWG 3.1). amneziawg-go also pads every
+        /// data packet with them inside the encryption, which inflates metered traffic.
+        #[cfg_attr(feature = "serde", serde(default))]
+        pub random_trailers: bool,
+    }
+
+    impl AmneziaParams {
+        pub fn under_load_headers(&self) -> RangeInclusive<u32> {
+            let max = self.under_load_pkt_magic_header_max;
+            self.under_load_pkt_magic_header..=max.unwrap_or(self.under_load_pkt_magic_header)
+        }
+
+        pub fn transport_headers(&self) -> RangeInclusive<u32> {
+            let max = self.transport_pkt_magic_header_max;
+            self.transport_pkt_magic_header..=max.unwrap_or(self.transport_pkt_magic_header)
+        }
+
+        /// No AmneziaWG 3.1 fields set, so an AmneziaWG 1.0 client reads these params correctly.
+        pub fn is_awg_1_0(&self) -> bool {
+            self.cookie_pkt_junk_size == 0
+                && self.transport_pkt_junk_size == 0
+                && self.under_load_pkt_magic_header_max.is_none()
+                && self.transport_pkt_magic_header_max.is_none()
+                && self.header_protection_key.is_none()
+                && !self.random_trailers
+        }
+    }
+
+    impl Sufficiency for AmneziaParams {
+        // H3/H4 ranges must not reach plain WireGuard types (1-4) or overlap, padded initiation and
+        // response must differ in size (148 + S1 != 92 + S2), and header protection needs a nonce
+        // worth of padding on every message type.
+        fn is_sufficient(&self) -> bool {
+            let paddings = [
+                self.init_pkt_junk_size,
+                self.response_pkt_junk_size,
+                self.cookie_pkt_junk_size,
+                self.transport_pkt_junk_size,
+            ];
+            let (h3, h4) = (self.under_load_headers(), self.transport_headers());
+            let key_ok = self.header_protection_key.as_ref().is_none_or(|key| {
+                key.len() == 64
+                    && key.bytes().all(|b| b.is_ascii_hexdigit())
+                    && paddings.iter().all(|s| *s >= HEADER_PROTECTION_NONCE_SIZE)
+            });
+            paddings.iter().all(|s| *s <= MAX_JUNK_SIZE)
+                && self.transport_pkt_junk_size <= MAX_TRANSPORT_JUNK_SIZE
+                && self.init_pkt_junk_size + 56 != self.response_pkt_junk_size
+                && *h3.start() > 4
+                && *h4.start() > 4
+                && !h3.is_empty()
+                && !h4.is_empty()
+                && (h3.end() < h4.start() || h4.end() < h3.start())
+                && (!self.random_trailers
+                    || [&h3, &h4]
+                        .iter()
+                        .all(|h| h.end() - h.start() <= MAX_HEADER_RANGE_WITH_TRAILERS))
+                && key_ok
+        }
+    }
+
+    #[derive(Debug, PartialEq, Clone)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+    #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+    #[cfg_attr(
+        feature = "typescript-bindings",
+        derive(TS),
+        ts(export),
+        ts(export_to = "bindings.ts")
+    )]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    pub struct AmneziaClientOptions {
+        /// Translator wire format, [`PROTOCOL_AWG_1_0`] or [`PROTOCOL_AWG_3_1`]. Clients skip
+        /// versions they do not know.
+        pub protocol_version: u16,
+
+        /// UDP addresses of the bridge translator (IPv4/IPv6 pair of the same bridge).
+        #[cfg_attr(feature = "utoipa", schema(value_type = Vec<String>))]
+        pub addresses: Vec<SocketAddr>,
+
+        pub params: AmneziaParams,
+    }
+
+    impl Sufficiency for AmneziaClientOptions {
+        // A 1.0 profile must not carry 3.1 fields an amneziawg 1.0 client would ignore.
+        fn is_sufficient(&self) -> bool {
+            let version_ok = match self.protocol_version {
+                PROTOCOL_AWG_1_0 => self.params.is_awg_1_0(),
+                PROTOCOL_AWG_3_1 => true,
+                _ => false,
+            };
+            !self.addresses.is_empty() && self.params.is_sufficient() && version_ok
+        }
+    }
+
+    impl TransportAssociation for AmneziaClientOptions {
+        fn transport_name(&self) -> String {
+            TRANSPORT_NAME.to_string()
+        }
+    }
+
+    pub type ClientOptions = AmneziaClientOptions;
+}
+
 #[cfg(test)]
 mod test {
-    use crate::{ClientConfig, PersistedClientConfig};
+    use crate::{ClientConfig, PersistedClientConfig, Sufficiency, amnezia};
 
     const RAW_V0_CLIENT_CONFIG: &str = r#"{"version":"0","transports":[{"transport_type":"quic_plain","args":{"addresses":["139.162.33.226:4443","[2400:8901::2000:faff:fea6:87f2]:4443"],"host":"netdna.bootstrapcdn.com","id_pubkey":"9JC91ZiszhIn3n4FG+MDYE/lYwhGdpHGWQTKUqGl+sE="}}]}"#;
 
@@ -399,8 +592,7 @@ mod test {
         // Verify transport type
         let params = match &parsed.transports[0] {
             ClientConfig::QuicPlain(p) => p,
-            ClientConfig::TlsPlain(_) => return Err("expected quic transport args".into()),
-            ClientConfig::SshPlain(_) => return Err("expected quic transport args".into()),
+            _ => return Err("expected quic transport args".into()),
         };
 
         // Verify addresses contain our test IPs
@@ -429,11 +621,12 @@ mod test {
     const QUIC: &str = r#"{"transport_type":"quic_plain","args":{"addresses":["1.2.3.4:4443"],"host":null,"id_pubkey":"pin"}}"#;
     const TLS: &str = r#"{"transport_type":"tls_plain","args":{"addresses":["1.2.3.4:443"],"host":null,"id_pubkey":"pin"}}"#;
     const SSH: &str = r#"{"transport_type":"ssh_plain","args":{"addresses":["1.2.3.4:22"],"id_pubkey":"pin","username":null,"client_auth_key":"key","client_banner":null}}"#;
+    const AWG: &str = r#"{"transport_type":"amnezia","args":{"protocol_version":1,"addresses":["1.2.3.4:51830"],"params":{"init_pkt_junk_size":40,"response_pkt_junk_size":50,"under_load_pkt_magic_header":1766607858,"transport_pkt_magic_header":2028465083}}}"#;
     const FUTURE: &str = r#"{"transport_type":"future_plain","args":{"anything":1}}"#;
 
     fn descriptor() -> String {
         format!(
-            r#"{{"version":"0","transports":[{QUIC}],"transports_v2":[{QUIC},{TLS},{SSH},{FUTURE}]}}"#
+            r#"{{"version":"0","transports":[{QUIC}],"transports_v2":[{QUIC},{TLS},{SSH},{AWG},{FUTURE}]}}"#
         )
     }
 
@@ -442,8 +635,45 @@ mod test {
         let parsed: PersistedClientConfig = serde_json::from_str(&descriptor())?;
 
         assert_eq!(parsed.transports.len(), 1);
-        assert_eq!(parsed.transports_v2.len(), 3);
-        assert_eq!(parsed.advertised().len(), 3);
+        assert_eq!(parsed.transports_v2.len(), 4);
+        assert_eq!(parsed.advertised().len(), 4);
+        assert_eq!(parsed.usable_transports().count(), 4);
+        assert_eq!(parsed.amnezia_profiles().count(), 1);
+        Ok(())
+    }
+
+    /// nym-bridges 0.3.0 knows QUIC, TLS and SSH only: it must keep those and drop an AWG entry
+    /// instead of failing the gateway.
+    #[test]
+    fn nym_bridges_0_3_0_drops_amnezia_entries() -> Result<(), serde_json::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "transport_type", content = "args", rename_all = "snake_case")]
+        #[allow(dead_code, clippy::enum_variant_names)]
+        enum Known {
+            QuicPlain(serde_json::Value),
+            TlsPlain(serde_json::Value),
+            SshPlain(serde_json::Value),
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        #[allow(dead_code)]
+        enum Entry {
+            Known(Known),
+            Unknown(serde::de::IgnoredAny),
+        }
+        #[derive(serde::Deserialize)]
+        struct V0_3_0 {
+            transports_v2: Vec<Entry>,
+        }
+
+        let parsed: V0_3_0 = serde_json::from_str(&descriptor())?;
+        let known = parsed
+            .transports_v2
+            .iter()
+            .filter(|e| matches!(e, Entry::Known(_)))
+            .count();
+
+        assert_eq!(known, 3);
         Ok(())
     }
 
@@ -512,5 +742,106 @@ mod test {
         serde_json::from_str::<Until2026_12>(&descriptor())?;
         serde_json::from_str::<From2026_13>(&descriptor())?;
         Ok(())
+    }
+
+    fn amnezia_options() -> amnezia::ClientOptions {
+        amnezia::ClientOptions {
+            protocol_version: amnezia::PROTOCOL_AWG_1_0,
+            addresses: vec!["139.162.33.226:51830".parse().unwrap()],
+            params: amnezia::AmneziaParams {
+                init_pkt_junk_size: 40,
+                response_pkt_junk_size: 50,
+                under_load_pkt_magic_header: 1_766_607_858,
+                transport_pkt_magic_header: 2_028_465_083,
+                cookie_pkt_junk_size: 0,
+                transport_pkt_junk_size: 0,
+                under_load_pkt_magic_header_max: None,
+                transport_pkt_magic_header_max: None,
+                header_protection_key: None,
+                random_trailers: false,
+            },
+        }
+    }
+
+    #[test]
+    fn amnezia_params_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let mut config: PersistedClientConfig = serde_json::from_str(RAW_V0_CLIENT_CONFIG)?;
+        config.transports_v2 = vec![ClientConfig::Amnezia(amnezia_options())];
+
+        let parsed: PersistedClientConfig = serde_json::from_str(&serde_json::to_string(&config)?)?;
+
+        assert_eq!(parsed, config);
+        Ok(())
+    }
+
+    #[test]
+    fn amnezia_sufficiency() {
+        assert!(amnezia_options().is_sufficient());
+
+        let mut colliding_header = amnezia_options();
+        colliding_header.params.transport_pkt_magic_header =
+            colliding_header.params.under_load_pkt_magic_header;
+        assert!(!colliding_header.is_sufficient());
+
+        let mut plain_header = amnezia_options();
+        plain_header.params.transport_pkt_magic_header = 4;
+        assert!(!plain_header.is_sufficient());
+
+        let mut same_size = amnezia_options();
+        same_size.params.response_pkt_junk_size = same_size.params.init_pkt_junk_size + 56;
+        assert!(!same_size.is_sufficient());
+
+        let mut no_addresses = amnezia_options();
+        no_addresses.addresses.clear();
+        assert!(!no_addresses.is_sufficient());
+    }
+
+    fn awg_3_1_options() -> amnezia::ClientOptions {
+        let mut options = amnezia_options();
+        options.protocol_version = amnezia::PROTOCOL_AWG_3_1;
+        options.params.cookie_pkt_junk_size = 20;
+        options.params.transport_pkt_junk_size = 16;
+        options.params.under_load_pkt_magic_header_max = Some(1_766_607_958);
+        options.params.transport_pkt_magic_header_max = Some(2_028_465_183);
+        options.params.header_protection_key = Some("ab".repeat(32));
+        options.params.random_trailers = true;
+        options
+    }
+
+    #[test]
+    fn amnezia_3_1_sufficiency() {
+        assert!(awg_3_1_options().is_sufficient());
+
+        let mut short_padding = awg_3_1_options();
+        short_padding.params.transport_pkt_junk_size = 8;
+        assert!(!short_padding.is_sufficient());
+
+        let mut mtu_eating_padding = awg_3_1_options();
+        mtu_eating_padding.params.transport_pkt_junk_size = amnezia::MAX_TRANSPORT_JUNK_SIZE + 1;
+        assert!(!mtu_eating_padding.is_sufficient());
+
+        let mut overlapping = awg_3_1_options();
+        overlapping.params.random_trailers = false;
+        overlapping.params.under_load_pkt_magic_header_max = Some(2_050_000_000);
+        assert!(!overlapping.is_sufficient());
+
+        let mut colliding_with_trailers = awg_3_1_options();
+        colliding_with_trailers
+            .params
+            .transport_pkt_magic_header_max =
+            Some(2_028_465_083 + amnezia::MAX_HEADER_RANGE_WITH_TRAILERS + 1);
+        assert!(!colliding_with_trailers.is_sufficient());
+
+        let mut bad_key = awg_3_1_options();
+        bad_key.params.header_protection_key = Some("zz".repeat(32));
+        assert!(!bad_key.is_sufficient());
+
+        let mut downgraded = awg_3_1_options();
+        downgraded.protocol_version = amnezia::PROTOCOL_AWG_1_0;
+        assert!(!downgraded.is_sufficient());
+
+        let mut unknown = awg_3_1_options();
+        unknown.protocol_version = 99;
+        assert!(!unknown.is_sufficient());
     }
 }

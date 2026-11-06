@@ -109,6 +109,11 @@ configure_firewall() {
 
 case "$1" in
 configure)
+    # Raise the socket buffer cap now, never lower a tuned one; systemd-sysctl applies
+    # 10-nym-bridge.conf on later boots.
+    if [ "$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)" -lt 4194304 ]; then
+        sysctl -q -w net.core.rmem_max=4194304 || true
+    fi
     create_user
     create_first_time_configuration
     fix_permissions

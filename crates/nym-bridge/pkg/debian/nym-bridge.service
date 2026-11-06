@@ -20,6 +20,8 @@ Restart=on-abnormal
 RestartSec=5
 User=nym
 Group=nym
+# One socket per amnezia session (default cap 10000), matching service/nym-bridge.service
+LimitNOFILE=65536
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
