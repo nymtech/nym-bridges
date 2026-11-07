@@ -6,6 +6,12 @@ Documentation=man:nym-bridge(1)
 Wants=network-online.target
 After=network-online.target NetworkManager.service systemd-resolved.service
 
+# Restart after a failed exit (non-zero status, crash), never after a deliberate stop. Give up after
+# 5 starts in 300 s so a persistently broken config shows as failed instead of flapping; clear it
+# with `systemctl reset-failed nym-bridge`.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
 [Service]
 # Before starting, refresh the public IPs / client params (see `public_ips_source` in the config),
 # make the config and keys readable by the service group, and open firewall ports matching the
@@ -16,7 +22,7 @@ ExecStartPre=-+/usr/lib/nym-bridge/prestart /etc/nym/bridges.toml
 ExecStart=/usr/bin/nym-bridge --config /etc/nym/bridges.toml
 ExecStopPost=-+/usr/lib/nym-bridge/firewall-sync close
 Type=exec
-Restart=on-abnormal
+Restart=on-failure
 RestartSec=5
 User=nym
 Group=nym
@@ -45,11 +51,6 @@ StateDirectory=nym
 SystemCallArchitectures=native
 SystemCallErrorNumber=EPERM
 SystemCallFilter=@system-service
-
-# Set a limit to the rate / number of restarts to prevent fail busy loop
-# in case of misconfiguration or something
-StartLimitBurst=5
-StartLimitIntervalSec=30
 
 [Install]
 WantedBy=multi-user.target
