@@ -90,8 +90,10 @@ impl crate::transport::GenerateServerConfig for ServerConfig {
             let mut key = [0u8; 32];
             rng.fill_bytes(&mut key);
             params.cookie_pkt_junk_size = rng.random_range(16..=64);
-            // Every data packet carries S4, so keep it small: the client MTU drops by S4.
-            params.transport_pkt_junk_size = rng.random_range(12..=24);
+            // Every data packet carries S4, so keep it small: the client MTU drops by S4. Skip 16:
+            // WireGuard data packets are 16-aligned, and a multiple of 16 keeps them aligned.
+            let s4 = rng.random_range(12..=23);
+            params.transport_pkt_junk_size = s4 + u16::from(s4 >= 16);
             params.header_protection_key = Some(key.iter().map(|b| format!("{b:02x}")).collect());
             // No random trailers: amneziawg-go also pads every data packet with them, inflating
             // the user's metered uplink by hundreds of bytes per small packet.
@@ -510,7 +512,8 @@ mod test {
                 msg.map(|m| m.len()) != Some(len)
             })
             .count();
-        assert_eq!(misread, 0);
+        // Random header bytes match about 103 in 2^32 packets, so one hit in 100k happens by chance (0.24%).
+        assert!(misread <= 1, "{misread} misread");
     }
 
     /// The parameter shapes a gateway generated for real (padding, single header values, header
@@ -537,6 +540,21 @@ mod test {
             transport_pkt_magic_header_max: None,
             random_trailers: false,
             ..awg_3_1()
+        }
+    }
+
+    #[test]
+    fn generated_s4_is_never_16_aligned() {
+        let mut rng = rand::rng();
+        for _ in 0..1000 {
+            let config = ServerConfig {
+                protocol_version: PROTOCOL_AWG_3_1,
+                ..Default::default()
+            }
+            .generate_config(&mut rng);
+            let s4 = config.params.as_ref().unwrap().transport_pkt_junk_size;
+            assert!((12..=24).contains(&s4) && !s4.is_multiple_of(16), "S4 {s4}");
+            assert!(config.is_sufficient());
         }
     }
 
