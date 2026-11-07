@@ -587,6 +587,13 @@ listen = "[::]:4422"
             }
         }
 
+        #[test]
+        fn amnezia_without_params_is_skipped_in_client_config() {
+            let cfg = BridgeConfig::parse(KEY_TEST_AMNEZIA).unwrap();
+            let client = crate::bridge_client_config::BridgeClientConfig::try_from(&cfg).unwrap();
+            assert!(!client.serialize().unwrap().contains("amnezia"));
+        }
+
         // when multiple transports each need key material, every one should get its own
         // independently generated key/file rather than sharing a single key across all of them.
         #[test]
