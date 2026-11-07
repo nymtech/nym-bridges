@@ -10,11 +10,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::*;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use std::{
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
 };
 
@@ -40,7 +40,26 @@ const AMNEZIA_SESSION_BUF: usize = 2048;
 const AMNEZIA_SOCKET_BUF: usize = 4 << 20;
 
 /// Upstream socket per client, with the millis since listener start of its last datagram.
-type AmneziaSession = (Arc<UdpSocket>, Arc<AtomicU64>);
+/// Upstream socket, last client packet (ms since start), whether the node has answered, and the
+/// token that stops the session task.
+type AmneziaSession = (
+    Arc<UdpSocket>,
+    Arc<AtomicU64>,
+    Arc<AtomicBool>,
+    CancellationToken,
+);
+
+/// Sessions per source IPv4 address or IPv6 /64, per listener socket. One carrier NAT address can
+/// carry thousands of real clients, so this only bounds a single address, not the table.
+const AMNEZIA_SESSIONS_PER_SOURCE: usize = 256;
+
+fn source_net(client: &SocketAddr) -> u64 {
+    // The listener is dual-stack: IPv4 senders arrive as `::ffff:a.b.c.d`.
+    match client.ip().to_canonical() {
+        IpAddr::V4(ip) => u32::from(ip).into(),
+        IpAddr::V6(ip) => (u128::from(ip) >> 64) as u64,
+    }
+}
 
 #[derive(Debug, Parser, PartialEq)]
 #[command(author="Nymtech", version, long_version = pretty_build_info_static())]
@@ -430,7 +449,7 @@ async fn run_amnezia_listener(
     let socket = Arc::new(socket);
     let started = Instant::now();
     let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
-    let mut sessions = HashMap::new();
+    let mut sessions = HashMap::<SocketAddr, AmneziaSession>::new();
     let mut buf = vec![0u8; AMNEZIA_MAX_DATAGRAM];
     loop {
         let (len, client) = tokio::select! {
@@ -438,8 +457,11 @@ async fn run_amnezia_listener(
                 info!("amnezia listener shutting down");
                 return Ok(())
             }
-            Some(client) = closed_rx.recv() => {
-                sessions.remove(&client);
+            Some((client, upstream)) = closed_rx.recv() => {
+                // A stale close must not drop a newer session of the same client.
+                if sessions.get(&client).is_some_and(|s| Arc::ptr_eq(&s.0, &upstream)) {
+                    sessions.remove(&client);
+                }
                 continue;
             }
             res = socket.recv_from(&mut buf) => match res {
@@ -456,10 +478,34 @@ async fn run_amnezia_listener(
             continue;
         };
 
-        let (upstream, last_seen) = match sessions.get(&client) {
+        let (upstream, last_seen, ..) = match sessions.get(&client) {
             Some(session) => AmneziaSession::clone(session),
-            None if sessions.len() >= limit => continue,
             None => {
+                // At a cap, drop the session to replace: unanswered first, then least recently used,
+                // so spoofed sources (which never refresh) go before real clients.
+                let net = source_net(&client);
+                let net_full = sessions.len() >= AMNEZIA_SESSIONS_PER_SOURCE
+                    && sessions.keys().filter(|c| source_net(c) == net).count()
+                        >= AMNEZIA_SESSIONS_PER_SOURCE;
+                if net_full || sessions.len() >= limit {
+                    let victim = sessions
+                        .iter()
+                        .filter(|(c, _)| !net_full || source_net(c) == net)
+                        .min_by_key(|(_, (_, last_seen, answered, _))| {
+                            (
+                                answered.load(Ordering::Relaxed),
+                                last_seen.load(Ordering::Relaxed),
+                            )
+                        })
+                        .map(|(c, _)| *c);
+                    let Some(victim) = victim else {
+                        trace!("amnezia session cap reached: {client} refused");
+                        continue;
+                    };
+                    if let Some((.., stop)) = sessions.remove(&victim) {
+                        stop.cancel();
+                    }
+                }
                 let upstream = async {
                     let upstream = UdpSocket::bind(upstream_bind).await?;
                     socket2::SockRef::from(&upstream).set_recv_buffer_size(AMNEZIA_SOCKET_BUF)?;
@@ -472,7 +518,12 @@ async fn run_amnezia_listener(
                 else {
                     continue;
                 };
-                let session = (upstream, Arc::new(AtomicU64::new(0)));
+                let session = (
+                    upstream,
+                    Arc::default(),
+                    Arc::default(),
+                    token.child_token(),
+                );
                 sessions.insert(client, session.clone());
                 tokio::spawn(amnezia_session(
                     socket.clone(),
@@ -481,7 +532,6 @@ async fn run_amnezia_listener(
                     framing.clone(),
                     closed_tx.clone(),
                     started,
-                    token.clone(),
                 ));
                 session
             }
@@ -499,22 +549,20 @@ async fn run_amnezia_listener(
 /// Carries the node's replies back to one client until the session goes idle.
 async fn amnezia_session(
     socket: Arc<UdpSocket>,
-    (upstream, last_seen): AmneziaSession,
+    (upstream, last_seen, answered, token): AmneziaSession,
     client: SocketAddr,
     framing: amnezia::Framing,
-    closed_tx: mpsc::UnboundedSender<SocketAddr>,
+    closed_tx: mpsc::UnboundedSender<(SocketAddr, Arc<UdpSocket>)>,
     started: Instant,
-    token: CancellationToken,
 ) {
     // Headroom for the transport padding, so replies are encoded without a copy.
     let headroom = framing.transport_padding();
     let mut buf = BytesMut::new();
-    let mut replied = false;
     loop {
         buf.clear();
         buf.reserve(headroom + AMNEZIA_SESSION_BUF);
         buf.resize(headroom, 0);
-        let wait = if replied {
+        let wait = if answered.load(Ordering::Relaxed) {
             AMNEZIA_SESSION_IDLE_TIMEOUT
         } else {
             AMNEZIA_SESSION_REPLY_TIMEOUT
@@ -525,10 +573,14 @@ async fn amnezia_session(
         };
         match res {
             // A cookie reply (type 3) is sent before the node knows the sender is a peer.
-            Ok(Ok(_)) => replied |= buf.get(headroom).is_some_and(|&t| t != 3),
+            Ok(Ok(_)) => {
+                if buf.get(headroom).is_some_and(|&t| t != 3) {
+                    answered.store(true, Ordering::Relaxed);
+                }
+            }
             // Once the node has answered, client traffic alone keeps the session alive.
             Err(_)
-                if replied
+                if answered.load(Ordering::Relaxed)
                     && started.elapsed()
                         < Duration::from_millis(last_seen.load(Ordering::Relaxed))
                             + AMNEZIA_SESSION_IDLE_TIMEOUT =>
@@ -545,7 +597,7 @@ async fn amnezia_session(
                 .ok();
         }
     }
-    closed_tx.send(client).ok();
+    closed_tx.send((client, upstream)).ok();
 }
 
 pub async fn handle_tls_connection(
@@ -762,17 +814,67 @@ mod test {
 
     #[tokio::test]
     async fn amnezia_listener_caps_sessions() {
-        let node = UdpSocket::bind("[::1]:0").await.unwrap();
-        let listen = spawn_listener(&node, Some(1)).await;
         let mut buf = vec![0u8; 2048];
 
-        for forwarded in [true, false] {
+        // Global cap, then per-source cap (all test clients share one IP). The newcomer is always
+        // admitted and the first client, the least recently used, loses its session.
+        for (limit, cap) in [(Some(1), 1), (None, AMNEZIA_SESSIONS_PER_SOURCE)] {
+            for answered in [true, false] {
+                let node = UdpSocket::bind("[::1]:0").await.unwrap();
+                let listen = spawn_listener(&node, limit).await;
+                let mut clients = Vec::new();
+                let mut first = None;
+                for _ in 0..=cap {
+                    let client = connected_client(listen).await;
+                    client.send(&encoded(wg_msg(1, 148))).await.unwrap();
+                    let (_, from) = node.recv_from(&mut buf).await.unwrap();
+                    first.get_or_insert(from);
+                    if answered {
+                        node.send_to(&wg_msg(2, 92), from).await.unwrap();
+                        client.recv(&mut buf).await.unwrap();
+                    }
+                    clients.push(client);
+                    // Recency has millisecond resolution; keep the order unambiguous.
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+                clients[0].send(&encoded(wg_msg(4, 64))).await.unwrap();
+                let (_, from) = node.recv_from(&mut buf).await.unwrap();
+                assert_ne!(Some(from), first, "least recently used session is evicted");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn amnezia_listener_evicts_unanswered_before_answered() {
+        let node = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listen = spawn_listener(&node, Some(2)).await;
+        let mut buf = vec![0u8; 2048];
+
+        // The answered client is older than the unanswered one but must keep its session.
+        let mut clients = Vec::new();
+        let mut upstreams = Vec::new();
+        for answered in [true, false, false] {
             let client = connected_client(listen).await;
             client.send(&encoded(wg_msg(1, 148))).await.unwrap();
-            let res =
-                tokio::time::timeout(Duration::from_millis(200), node.recv_from(&mut buf)).await;
-            assert_eq!(res.is_ok(), forwarded);
+            let (_, from) = node.recv_from(&mut buf).await.unwrap();
+            if answered {
+                node.send_to(&wg_msg(2, 92), from).await.unwrap();
+                client.recv(&mut buf).await.unwrap();
+            }
+            upstreams.push(from);
+            clients.push(client);
         }
+        clients[0].send(&encoded(wg_msg(4, 64))).await.unwrap();
+        let (_, from) = node.recv_from(&mut buf).await.unwrap();
+        assert_eq!(from, upstreams[0]);
+    }
+
+    #[test]
+    fn amnezia_source_net_canonicalises_mapped_ipv4() {
+        let net = |a: &str| source_net(&a.parse().unwrap());
+        assert_ne!(net("[::ffff:192.0.2.1]:1"), net("[::ffff:198.51.100.1]:1"));
+        assert_eq!(net("[::ffff:192.0.2.1]:1"), net("192.0.2.1:2"));
+        assert_eq!(net("[2001:db8::1]:1"), net("[2001:db8::2]:2"));
     }
 
     #[tokio::test(start_paused = true)]
