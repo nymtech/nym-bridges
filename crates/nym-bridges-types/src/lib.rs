@@ -492,13 +492,9 @@ pub mod amnezia {
                 && self.header_protection_key.is_none()
                 && !self.random_trailers
         }
-    }
 
-    impl Sufficiency for AmneziaParams {
-        // H3/H4 ranges must not reach plain WireGuard types (1-4) or overlap, padded initiation and
-        // response must differ in size (148 + S1 != 92 + S2), and header protection needs a nonce
-        // worth of padding on every message type.
-        fn is_sufficient(&self) -> bool {
+        /// The first rule the params break, as an operator facing message naming the key.
+        pub fn problem(&self) -> Option<&'static str> {
             let paddings = [
                 self.init_pkt_junk_size,
                 self.response_pkt_junk_size,
@@ -506,24 +502,51 @@ pub mod amnezia {
                 self.transport_pkt_junk_size,
             ];
             let (h3, h4) = (self.under_load_headers(), self.transport_headers());
-            let key_ok = self.header_protection_key.as_ref().is_none_or(|key| {
-                key.len() == 64
-                    && key.bytes().all(|b| b.is_ascii_hexdigit())
-                    && paddings.iter().all(|s| *s >= HEADER_PROTECTION_NONCE_SIZE)
-            });
-            paddings.iter().all(|s| *s <= MAX_JUNK_SIZE)
-                && self.transport_pkt_junk_size <= MAX_TRANSPORT_JUNK_SIZE
-                && self.init_pkt_junk_size + 56 != self.response_pkt_junk_size
-                && *h3.start() > 4
-                && *h4.start() > 4
-                && !h3.is_empty()
-                && !h4.is_empty()
-                && (h3.end() < h4.start() || h4.end() < h3.start())
-                && (!self.random_trailers
-                    || [&h3, &h4]
-                        .iter()
-                        .all(|h| h.end() - h.start() <= MAX_HEADER_RANGE_WITH_TRAILERS))
-                && key_ok
+            Some(if paddings.iter().any(|s| *s > MAX_JUNK_SIZE) {
+                "init_pkt_junk_size, response_pkt_junk_size, cookie_pkt_junk_size and transport_pkt_junk_size must be at most 1280"
+            } else if self.transport_pkt_junk_size > MAX_TRANSPORT_JUNK_SIZE {
+                "transport_pkt_junk_size must be at most 32"
+            } else if self.init_pkt_junk_size + 56 == self.response_pkt_junk_size {
+                "response_pkt_junk_size must not equal init_pkt_junk_size + 56"
+            } else if self.cookie_pkt_junk_size >= self.init_pkt_junk_size + 84 {
+                "cookie_pkt_junk_size must be below init_pkt_junk_size + 84"
+            } else if *h3.start() <= 4 {
+                "under_load_pkt_magic_header must be above 4"
+            } else if *h4.start() <= 4 {
+                "transport_pkt_magic_header must be above 4"
+            } else if h3.is_empty() {
+                "under_load_pkt_magic_header_max must not be below under_load_pkt_magic_header"
+            } else if h4.is_empty() {
+                "transport_pkt_magic_header_max must not be below transport_pkt_magic_header"
+            } else if !(h3.end() < h4.start() || h4.end() < h3.start()) {
+                "under_load_pkt_magic_header and transport_pkt_magic_header ranges must not overlap"
+            } else if self.random_trailers
+                && [&h3, &h4]
+                    .iter()
+                    .any(|h| h.end() - h.start() > MAX_HEADER_RANGE_WITH_TRAILERS)
+            {
+                "random_trailers needs magic header ranges at most 255 wide"
+            } else if let Some(key) = &self.header_protection_key {
+                if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    "header_protection_key must be 64 hex characters"
+                } else if paddings.iter().any(|s| *s < HEADER_PROTECTION_NONCE_SIZE) {
+                    "header_protection_key needs init_pkt_junk_size, response_pkt_junk_size, cookie_pkt_junk_size and transport_pkt_junk_size all at least 12 (the nonce size)"
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            })
+        }
+    }
+
+    // H3/H4 ranges must not reach plain WireGuard types (1-4) or overlap, padded initiation and
+    // response must differ in size (148 + S1 != 92 + S2), the cookie reply must be smaller than
+    // the initiation (64 + S3 < 148 + S1), and header protection needs a nonce
+    // worth of padding on every message type.
+    impl Sufficiency for AmneziaParams {
+        fn is_sufficient(&self) -> bool {
+            self.problem().is_none()
         }
     }
 
@@ -843,5 +866,30 @@ mod test {
         let mut unknown = awg_3_1_options();
         unknown.protocol_version = 99;
         assert!(!unknown.is_sufficient());
+    }
+
+    #[test]
+    fn amnezia_params_problem_names_the_key() {
+        for key in [
+            "transport_pkt_junk_size",
+            "response_pkt_junk_size",
+            "cookie_pkt_junk_size",
+            "transport_pkt_magic_header",
+            "header_protection_key",
+            "under_load_pkt_magic_header_max",
+        ] {
+            let mut p = awg_3_1_options().params;
+            match key {
+                "transport_pkt_junk_size" => p.transport_pkt_junk_size = 11,
+                "response_pkt_junk_size" => p.response_pkt_junk_size = p.init_pkt_junk_size + 56,
+                "cookie_pkt_junk_size" => p.cookie_pkt_junk_size = p.init_pkt_junk_size + 84,
+                "transport_pkt_magic_header" => p.transport_pkt_magic_header = 4,
+                "header_protection_key" => p.header_protection_key = Some("zz".repeat(32)),
+                "under_load_pkt_magic_header_max" => p.under_load_pkt_magic_header_max = Some(1),
+                _ => unreachable!("no mutation for {key}"),
+            }
+            let problem = p.problem().expect(key);
+            assert!(problem.contains(key), "{key}: {problem}");
+        }
     }
 }

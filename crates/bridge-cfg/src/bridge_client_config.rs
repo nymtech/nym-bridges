@@ -11,6 +11,7 @@ use nym_bridges::config::{
 };
 use nym_bridges::transport::GeneratedKeyMaterial;
 use nym_bridges::types::Sufficiency;
+use tracing::warn;
 
 use crate::bridge_config::BridgeConfig;
 
@@ -99,6 +100,14 @@ impl TryFrom<&BridgeConfig> for BridgeClientConfig {
             }
         }
 
+        // An unusable amnezia block must not stop the refresh of the other transports.
+        bridge_cfg.transports.retain(|t| match t {
+            TransportServerConfig::Amnezia(cfg) => cfg.problem().is_none_or(|problem| {
+                warn!("skipping the amnezia transport: {problem}");
+                false
+            }),
+            _ => true,
+        });
         for transport in &bridge_cfg.transports {
             if !transport.is_sufficient() {
                 bail!(

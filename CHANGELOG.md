@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AmneziaWG sockets request 4 MiB receive buffers, so long-RTT downloads no longer drop reply bursts from WireGuard. Operators: the Debian package installs `/usr/lib/sysctl.d/10-nym-bridge.conf` raising `net.core.rmem_max` to 4 MiB; it never lowers a higher value, and any later sysctl file overrides it. Other installs: set `net.core.rmem_max >= 4194304` (nym-bridge warns at start when it is lower)
 - `bridge-cfg` generates AmneziaWG 3.1 params without random trailers: amneziawg-go pads every data packet with them, inflating metered uplink
 - AmneziaWG sessions the node has not answered within 10 s are closed (a cookie reply does not count), so spoofed sources cannot fill the session limit
+- nym-bridge and bridge-cfg name the first AmneziaWG parameter they refuse, such as `transport_pkt_junk_size` below the 12 byte nonce, and bridge-cfg skips an AmneziaWG block with unusable params instead of failing the refresh; a cookie reply (64 + `cookie_pkt_junk_size`) must now be smaller than the initiation (148 + `init_pkt_junk_size`)
 
 ## [0.3.0] - 2026-10-28
 

@@ -101,22 +101,34 @@ impl crate::transport::GenerateServerConfig for ServerConfig {
     }
 }
 
-impl Sufficiency for ServerConfig {
-    // Operator supplied params must also keep the response smaller than the initiation, and a 1.0
-    // port must not carry 3.1 fields.
-    fn is_sufficient(&self) -> bool {
+impl ServerConfig {
+    /// The first rule the config breaks, as an operator facing message.
+    pub fn problem(&self) -> Option<&'static str> {
         let Some(p) = &self.params else {
-            return false;
+            return Some("amnezia transport params are missing");
         };
         let version_ok = match self.protocol_version {
             PROTOCOL_AWG_1_0 => p.is_awg_1_0(),
             PROTOCOL_AWG_3_1 => true,
-            _ => false,
+            _ => return Some("protocol_version must be 1 (AmneziaWG 1.0) or 2 (AmneziaWG 3.1)"),
         };
-        version_ok
-            && p.is_sufficient()
-            && p.response_pkt_junk_size < p.init_pkt_junk_size + 56
-            && Framing::new(p).is_some()
+        Some(if !version_ok {
+            "AmneziaWG 1.0 transport cannot carry 3.1 params (cookie_pkt_junk_size, transport_pkt_junk_size, *_max headers, header_protection_key, random_trailers)"
+        } else if let Some(problem) = p.problem() {
+            problem
+        } else if p.response_pkt_junk_size >= p.init_pkt_junk_size + 56 {
+            "response_pkt_junk_size must be below init_pkt_junk_size + 56"
+        } else {
+            return None;
+        })
+    }
+}
+
+impl Sufficiency for ServerConfig {
+    // Operator supplied params must also keep the response smaller than the initiation, and a 1.0
+    // port must not carry 3.1 fields.
+    fn is_sufficient(&self) -> bool {
+        self.problem().is_none()
     }
 }
 
@@ -665,6 +677,21 @@ mod test {
             .is_sufficient()
         );
         assert!(!awg_3_1_on_1_0_port.is_sufficient());
+        let amplifying_cookie = ServerConfig {
+            protocol_version: PROTOCOL_AWG_3_1,
+            params: Some(AmneziaParams {
+                cookie_pkt_junk_size: awg_3_1().init_pkt_junk_size + 84,
+                ..awg_3_1()
+            }),
+            ..Default::default()
+        };
+        assert!(!amplifying_cookie.is_sufficient());
+        assert!(
+            amplifying_cookie
+                .problem()
+                .unwrap()
+                .contains("cookie_pkt_junk_size")
+        );
         assert!(
             ServerConfig {
                 protocol_version: PROTOCOL_AWG_3_1,

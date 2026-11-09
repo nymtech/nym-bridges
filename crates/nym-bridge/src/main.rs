@@ -23,7 +23,6 @@ use nym_bridges::{
     forward::responder::process_udp,
     session::Session,
     transport::{amnezia, quic, ssh, tls},
-    types::Sufficiency,
 };
 
 /// WireGuard RejectAfterTime: a session silent for longer than this has no live keys left.
@@ -411,8 +410,8 @@ async fn run_amnezia_listener(
     fwd_cfg: ForwardConfig,
     options: amnezia::ServerConfig,
 ) -> Result<()> {
-    if !options.is_sufficient() {
-        anyhow::bail!("amnezia transport params are missing or invalid");
+    if let Some(problem) = options.problem() {
+        anyhow::bail!("invalid amnezia transport params: {problem}");
     }
     let framing = options
         .params
