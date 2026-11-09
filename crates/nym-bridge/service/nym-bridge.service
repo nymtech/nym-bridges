@@ -6,10 +6,11 @@ Description=nym-bridge daemon
 # Make sure the network is online before this starts
 After=NetworkManager.service systemd-resolved.service nym-node.service
 
-# Set a limit to the rate / number of restarts to prevent fail busy loop
-# in case of misconfiguration or something
+# Restart after a failed exit (non-zero status, crash), never after a deliberate stop. Give up after
+# 5 starts in 300 s so a persistently broken config shows as failed instead of flapping; clear it
+# with `systemctl reset-failed nym-bridge`.
 StartLimitBurst=5
-StartLimitIntervalSec=30
+StartLimitIntervalSec=300
 
 [Service]
 # User=<USER>
@@ -18,7 +19,7 @@ StartLimitIntervalSec=30
 LimitNOFILE=65536
 ExecStart=/usr/local/bin/nym-bridge
 
-Restart=on-abnormal
+Restart=on-failure
 RestartSec=2
 
 [Install]

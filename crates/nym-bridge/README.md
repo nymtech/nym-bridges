@@ -49,19 +49,21 @@ Description=nym-bridge daemon
 # Make sure the network is online before this starts
 After=NetworkManager.service systemd-resolved.service nym-node.service
 
-# Set a limit to the rate / number of restarts to prevent fail busy loop
-# in case of misconfiguration or something
+# A copy in /etc/systemd/system shadows the packaged unit in /lib/systemd/system: update older copies.
+# Restart after a failed exit (non-zero status, crash), never after a deliberate stop. Give up after
+# 5 starts in 300 s so a persistently broken config shows as failed instead of flapping; clear it
+# with `systemctl reset-failed nym-bridge`.
 StartLimitBurst=5
-StartLimitIntervalSec=30
+StartLimitIntervalSec=300
 
 [Service]
 # User=<USER>
 # Group=<USER>
 # Type=simple
-LimitNOFile=65536
+LimitNOFILE=65536
 ExecStart=/usr/local/bin/nym-bridge
 
-Restart=on-abnormal
+Restart=on-failure
 RestartSec=2
 
 [Install]
@@ -76,7 +78,7 @@ configuration is not the default location, the systemd service can be modified t
 
 ```diff
 [Service]
-LimitNOFile=65536
+LimitNOFILE=65536
 - ExecStart=/usr/local/bin/nym-bridge
 + ExecStart=/usr/local/bin/nym-bridge -c <path to bridge config file>
 ```

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The nym-bridge systemd units restart the bridge after a failed exit and stop retrying after 5 starts in 300 s, so a persistently broken config shows as failed instead of staying down or flapping
+
 ### Added
 
 - `ClientConfig::Amnezia` (`transport_type = "amnezia"`) in `transports_v2` of the client bridge descriptor for the AmneziaWG translator, one entry per protocol version. `transports` stays QUIC-only; clients that do not know the type drop it
