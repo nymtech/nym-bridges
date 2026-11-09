@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-cfg"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-tools"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1927,14 +1927,16 @@ dependencies = [
 
 [[package]]
 name = "nym-bridge"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "anyhow",
+ "bytes",
  "clap",
  "nym-bin-common",
  "nym-bridges",
  "quinn",
  "rustls",
+ "socket2",
  "tokio",
  "tokio-rustls",
  "tokio-util",
@@ -1944,12 +1946,13 @@ dependencies = [
 
 [[package]]
 name = "nym-bridges"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "anyhow",
  "base64",
  "bs58",
  "bytes",
+ "chacha20",
  "ed25519-dalek",
  "futures",
  "getrandom 0.4.3",
@@ -1988,7 +1991,7 @@ dependencies = [
 
 [[package]]
 name = "nym-bridges-types"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "serde",
  "serde_json",

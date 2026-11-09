@@ -110,7 +110,7 @@ fn create_fresh_bridge_config() -> Result<()> {
                 let has_ipv6 = cfg.addresses.iter().any(|addr| addr.is_ipv6());
                 assert!(has_ipv4 || has_ipv6, "should have at least one IP address");
             }
-            ClientConfig::TlsPlain(_) | ClientConfig::SshPlain(_) => {
+            ClientConfig::TlsPlain(_) | ClientConfig::SshPlain(_) | ClientConfig::Amnezia(_) => {
                 assert!(
                     transport.is_sufficient(),
                     "{transport:?} should be sufficient"
@@ -241,6 +241,7 @@ fn adapt_existing_bridge_config() {
                 assert_eq!(cfg.listen, "[::]:8422".parse().unwrap());
                 assert_eq!(cfg.connection_limit, Some(10_000));
             }
+            TransportServerConfig::Amnezia(_) => unreachable!(),
         });
 
     let client_params_out =
@@ -265,6 +266,7 @@ fn adapt_existing_bridge_config() {
                 assert!(cfg.addresses.contains(&"192.168.0.1:8422".parse().unwrap()));
                 assert_eq!(cfg.username, Some("bridge-client".into()));
             }
+            ClientConfig::Amnezia(_) => unreachable!(),
         });
 }
 

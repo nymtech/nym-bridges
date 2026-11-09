@@ -4,7 +4,12 @@ services:
     build:
       context: ../
       target: wg0
+      args:
+        AWG_VERSION: ${AWG_VERSION:-v3.1.20260828}
+        AWG_LEGACY_VERSION: ${AWG_LEGACY_VERSION:-v0.2.13}
     container_name: wg0
+    devices:
+      - /dev/net/tun:/dev/net/tun
     cap_add:
       - NET_ADMIN
       - SYS_MODULE

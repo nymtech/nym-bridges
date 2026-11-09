@@ -166,6 +166,10 @@ impl BridgeConn {
                     closer: Box::new(()),
                 })
             }
+            // AmneziaWG is dialed as UDP by the WireGuard client, not as a bridge stream.
+            ClientConfig::Amnezia(_) => Err(TransportError::config_err(
+                "the amnezia transport is not a bridge stream transport",
+            )),
         }
     }
 
