@@ -125,6 +125,11 @@ async fn main() -> Result<()> {
                 });
             }
             TransportServerConfig::Amnezia(options) => {
+                // An invalid optional transport must not take the others down.
+                if let Some(problem) = options.problem() {
+                    error!("skipping amnezia transport, invalid params: {problem}");
+                    continue;
+                }
                 transport_listeners.spawn(async {
                     let err_token = cloned_token.clone();
                     if let Err(e) = launch_amnezia_listener(cloned_token, fwd_config, options).await
@@ -137,7 +142,12 @@ async fn main() -> Result<()> {
         }
     }
 
+    anyhow::ensure!(
+        !transport_listeners.is_empty(),
+        "no usable transport configured"
+    );
     info!("local forward running, waiting for shutdown");
+    let mut failed = false;
     // If an interrupt signal is received cancel the original token
     tokio::select! {
         signal = signal::ctrl_c() => {
@@ -153,12 +163,19 @@ async fn main() -> Result<()> {
         }
         _ = token.cancelled() => {
             warn!("shutting down due to internal error");
+            failed = true;
+        }
+        // Every listener returned without cancelling: none could start.
+        _ = async { while transport_listeners.join_next().await.is_some() {} } => {
+            error!("no transport is running");
+            failed = true;
         }
     }
 
     // Wait for tasks to complete
     transport_listeners.join_all().await;
 
+    anyhow::ensure!(!failed, "a transport listener failed");
     Ok(())
 }
 
@@ -366,7 +383,14 @@ async fn launch_amnezia_listener(
             connection_limit: Some(limit),
             ..options.clone()
         };
-        let socket = bind_reuse_port(options.listen)?;
+        // A bad listen address is an operator mistake on an optional transport: keep the others up.
+        let socket = match bind_reuse_port(options.listen) {
+            Ok(socket) => socket,
+            Err(e) => {
+                error!("amnezia transport cannot listen on {}: {e}", options.listen);
+                return Ok(());
+            }
+        };
         if listeners.is_empty()
             && socket2::SockRef::from(&socket).recv_buffer_size()? < AMNEZIA_SOCKET_BUF
         {

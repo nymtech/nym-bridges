@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bridge-cfg` generates AmneziaWG 3.1 params without random trailers: amneziawg-go pads every data packet with them, inflating metered uplink
 - AmneziaWG sessions the node has not answered within 10 s are closed (a cookie reply does not count), so spoofed sources cannot fill the session limit
 - nym-bridge and bridge-cfg name the first AmneziaWG parameter they refuse, such as `transport_pkt_junk_size` below the 12 byte nonce, and bridge-cfg skips an AmneziaWG block with unusable params instead of failing the refresh; a cookie reply (64 + `cookie_pkt_junk_size`) must now be smaller than the initiation (148 + `init_pkt_junk_size`)
+- nym-bridge skips an AmneziaWG transport with invalid params or an unusable listen address instead of stopping QUIC, TLS and SSH too, and exits non-zero when no transport could be started (before, a config with zero usable transports ran idle)
 
 ## [0.3.0] - 2026-10-28
 
