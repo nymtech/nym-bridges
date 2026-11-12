@@ -145,9 +145,13 @@ impl ServerConfig {
             },
             ..Default::default()
         };
-        if let Some(ref banner) = self.banner {
-            config.server_id = russh::SshId::Standard(std::borrow::Cow::Owned(banner.clone()));
-        }
+        // Fall back to a generic identification string rather than leaving the underlying
+        // library's own name and version as the default, even for an operator who hasn't set one.
+        let server_id = self
+            .banner
+            .clone()
+            .unwrap_or_else(|| "SSH-2.0-OpenSSH_9.6".to_string());
+        config.server_id = russh::SshId::Standard(std::borrow::Cow::Owned(server_id));
 
         Ok(config)
     }

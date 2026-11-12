@@ -24,6 +24,9 @@ pub struct ServerConfig {
     /// Address to listen on
     pub listen: SocketAddr,
 
+    /// Client address to block
+    pub block: Option<SocketAddr>,
+
     /// Maximum number of concurrent connections to allow
     pub connection_limit: Option<usize>,
 
@@ -39,6 +42,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen: DEFAULT_SOCK_ADDR.parse().unwrap(),
+            block: Default::default(),
             connection_limit: Default::default(),
             identity_key: Default::default(),
             private_ed25519_identity_key_file: Default::default(),

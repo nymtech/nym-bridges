@@ -6,6 +6,7 @@ use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -185,6 +186,8 @@ async fn launch_tls_listener(
     let listener = tokio::net::TcpListener::bind(&options.listen).await?;
     tracing::info!("tls transport listening on {}", &options.listen);
 
+    let open_connections = Arc::new(AtomicUsize::new(0));
+
     loop {
         tokio::select! {
             // Use the provided token to listen to cancellation requests
@@ -195,15 +198,39 @@ async fn launch_tls_listener(
             }
             res = listener.accept() => {
                 let (stream, address) = res?;
+
+                if options
+                    .connection_limit
+                    .is_some_and(|n| open_connections.load(Ordering::Relaxed) >= n)
+                {
+                    info!("refusing due to open connection limit");
+                    continue;
+                } else if Some(address) == options.block {
+                    info!("refusing blocked client IP address");
+                    continue;
+                }
+
                 let acceptor = acceptor.clone();
                 let client_token = token.clone();
                 let fwd = fwd_cfg.clone();
+                let open_connections = open_connections.clone();
+                open_connections.fetch_add(1, Ordering::Relaxed);
 
                 let fut = async move {
-                    let stream = acceptor.accept(stream).await?;
+                    let stream = match acceptor.accept(stream).await {
+                        Ok(stream) => stream,
+                        Err(e) => {
+                            warn!("tls handshake failed from {address}: {e}");
+                            open_connections.fetch_sub(1, Ordering::Relaxed);
+                            return Ok(());
+                        }
+                    };
                     let session_cancel = client_token;
 
-                    tokio::spawn(handle_tls_connection(stream, address, fwd, session_cancel));
+                    tokio::spawn(async move {
+                        handle_tls_connection(stream, address, fwd, session_cancel).await;
+                        open_connections.fetch_sub(1, Ordering::Relaxed);
+                    });
 
                     Ok(()) as Result<()>
                 };
@@ -233,6 +260,8 @@ async fn launch_ssh_listener(
     let listener = tokio::net::TcpListener::bind(&options.listen).await?;
     tracing::info!("ssh transport listening on {}", &options.listen);
 
+    let open_connections = Arc::new(AtomicUsize::new(0));
+
     loop {
         tokio::select! {
             // Use the provided token to listen to cancellation requests
@@ -243,10 +272,21 @@ async fn launch_ssh_listener(
             }
             res = listener.accept() => {
                 let (stream, address) = res?;
+
+                if options
+                    .connection_limit
+                    .is_some_and(|n| open_connections.load(Ordering::Relaxed) >= n)
+                {
+                    info!("refusing due to open connection limit");
+                    continue;
+                }
+
                 let config = config.clone();
                 let expected_username = expected_username.clone();
                 let client_token = token.clone();
                 let fwd = fwd_cfg.clone();
+                let open_connections = open_connections.clone();
+                open_connections.fetch_add(1, Ordering::Relaxed);
 
                 tokio::spawn(async move {
                     match ssh::accept(config, expected_username, expected_client_pubkey, stream).await {
@@ -260,6 +300,7 @@ async fn launch_ssh_listener(
                             warn!("ssh handshake failed: {err}");
                         }
                     }
+                    open_connections.fetch_sub(1, Ordering::Relaxed);
                 });
             }
         }
