@@ -32,8 +32,8 @@ const DEFAULT_SOCK_ADDR: &str = "[::]:4443";
 /// ... Only one side of any given connection needs keep-alive enabled for the connection to
 /// be preserved. Must be set lower than the idle_timeout of both peers to be effective.
 /// ```
-/// Default idle timeout is 30s. Our clients set to 60s  using [`QUIC_SESSION_IDLE_TIMEOUT`] to be
-/// safe.
+/// Default idle timeout is 30s, and the smaller of the two peers' values wins. Client and server both
+/// set 60s using [`QUIC_SESSION_IDLE_TIMEOUT`] to be safe.
 const QUIC_SESSION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
 
 lazy_static::lazy_static! {
@@ -151,6 +151,7 @@ pub fn create_endpoint(options: &ServerConfig) -> Result<quinn::Endpoint, Transp
         quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
     let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config.max_concurrent_uni_streams(0_u8.into());
+    transport_config.max_idle_timeout(Some(*QUIC_SESSION_IDLE_TIMEOUT));
 
     Ok(quinn::Endpoint::server(server_config, options.listen)?)
 }
