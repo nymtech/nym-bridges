@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-12
+
+### Fixed
+
+- The QUIC bridge server now applies the 60 s idle timeout the client already assumed. It ran on quinn's 30 s default, which won over the client's 60 s, so a device silent for 30 s lost its connection
+
+### Changed
+
+- Do not enable uniffi's `cli` feature. It linked `uniffi_bindgen` into the mobile libraries, whose leftover bytes differ between builds and break reproducible F-Droid builds (https://github.com/nymtech/nym-bridges/pull/108)
+
 ## [0.3.0] - 2026-10-28
 
 ### Added
