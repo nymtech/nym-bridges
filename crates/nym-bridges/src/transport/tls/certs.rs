@@ -23,6 +23,7 @@
 //!     - done last to avoid ed25519 signature verification in case string based checks fail
 //!   - uses the default [`rustls::client::WebPkiServerVerifier`] to verify TLS 1.2 / TLS 1.3
 
+use ::time::{Duration, OffsetDateTime};
 use base64::prelude::*;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey};
@@ -63,6 +64,12 @@ pub fn get_cert_signed_by_ed25519<'a>(
     params
         .distinguished_name
         .push(DnType::CommonName, common_name.to_string());
+    // rcgen's own default validity window (1975-01-01 to 4096-01-01) is a strong outlier next to
+    // an ordinary short-lived certificate, and is visible to a passive observer in the
+    // ServerHello alone. The client's verifier never checks these dates (see
+    // `verify_server_cert` below), so narrowing them is free.
+    params.not_before = OffsetDateTime::now_utc() - Duration::days(1);
+    params.not_after = OffsetDateTime::now_utc() + Duration::days(397);
     let cert = params.self_signed(&key_pair)?;
 
     trace!("cert: {cert:?}");
@@ -437,6 +444,22 @@ mod test {
         );
 
         assert!(result.is_ok());
+    }
+
+    /// rcgen's own default validity window is 1975-01-01 to 4096-01-01, a strong outlier next
+    /// to an ordinary certificate. Make sure the generated cert no longer carries those dates.
+    #[test]
+    fn certificate_validity_window_is_not_the_rcgen_default() {
+        let signing_key: SigningKey = SigningKey::generate(&mut rand::rng());
+        let encoded_pubkey = bs58::encode(signing_key.verifying_key().to_bytes()).into_string();
+
+        let (cert, _) = get_cert_signed_by_ed25519(encoded_pubkey, &signing_key).unwrap();
+        let parsed = parse_certificate(cert.der()).unwrap();
+        let validity = parsed.validity();
+
+        // rcgen's own sentinel dates, as Unix timestamps (1975-01-01T00:00:00Z, 4096-01-01T00:00:00Z).
+        assert_ne!(validity.not_before.timestamp(), 157_766_400);
+        assert_ne!(validity.not_after.timestamp(), 67_090_118_400);
     }
 
     #[test]
