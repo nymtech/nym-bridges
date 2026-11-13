@@ -236,6 +236,9 @@ transport_type = "ssh_plain"
 # Address to listen on
 listen = "[::]:4422"
 
+# Client IP address to block.
+# block = "2a01::1234"
+
 # Maximum number of concurrent connections to allow
 # connection_limit = 0
 

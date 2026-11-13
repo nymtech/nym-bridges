@@ -1,6 +1,11 @@
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::RawFd;
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
@@ -69,6 +74,9 @@ pub struct ServerConfig {
     /// Maximum number of concurrent connections to allow
     pub connection_limit: Option<usize>,
 
+    /// Client IP address to block
+    pub block: Option<IpAddr>,
+
     /// Base64 encoded Identity Key, for use as the ed25519 SSH host key. Used only if
     /// `private_ed25519_identity_key_file` is not provided.
     pub identity_key: Option<String>,
@@ -103,6 +111,7 @@ impl Default for ServerConfig {
         Self {
             listen: DEFAULT_SOCK_ADDR.parse().unwrap(),
             connection_limit: Default::default(),
+            block: Default::default(),
             identity_key: Default::default(),
             private_ed25519_identity_key_file: Default::default(),
             expected_username: Default::default(),

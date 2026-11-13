@@ -290,6 +290,10 @@ async fn launch_ssh_listener(
                 {
                     info!("refusing due to open connection limit");
                     continue;
+                } else if Some(address.ip().to_canonical()) == options.block.map(|b| b.to_canonical())
+                {
+                    info!("refusing blocked client IP address");
+                    continue;
                 }
 
                 let config = config.clone();
