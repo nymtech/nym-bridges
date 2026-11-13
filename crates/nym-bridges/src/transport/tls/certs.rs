@@ -456,10 +456,17 @@ mod test {
         let (cert, _) = get_cert_signed_by_ed25519(encoded_pubkey, &signing_key).unwrap();
         let parsed = parse_certificate(cert.der()).unwrap();
         let validity = parsed.validity();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
 
         // rcgen's own sentinel dates, as Unix timestamps (1975-01-01T00:00:00Z, 4096-01-01T00:00:00Z).
         assert_ne!(validity.not_before.timestamp(), 157_766_400);
         assert_ne!(validity.not_after.timestamp(), 67_090_118_400);
+
+        // The window should actually bracket "now" with roughly a year on the far side, not just
+        // avoid the two sentinel values by coincidence.
+        assert!(validity.not_before.timestamp() <= now);
+        assert!(validity.not_after.timestamp() > now + Duration::days(300).whole_seconds());
+        assert!(validity.not_after.timestamp() < now + Duration::days(500).whole_seconds());
     }
 
     #[test]
