@@ -39,8 +39,8 @@ stateless_retry = false
 # (UDP) Socket address to listen on
 listen = "[::]:4443"
 
-# Client address to block for sending, be default this is set by the OS on connection handling.
-# block = "[2a01::1234]:5000" 
+# Client IP address to block.
+# block = "2a01::1234"
 
 # Maximum number of concurrent connections to allow
 # connection_limit = 0
@@ -61,6 +61,9 @@ transport_type = "tls_plain"
 # (TCP) Socket address to listen on
 listen = "[::]:4443"
 
+# Client IP address to block.
+# block = "2a01::1234"
+
 # Maximum number of concurrent connections to allow
 # connection_limit = 0
 
@@ -79,6 +82,9 @@ transport_type = "ssh_plain"
 [transports.args]
 # (TCP) Socket address to listen on
 listen = "[::]:4422"
+
+# Maximum number of concurrent connections to allow
+# connection_limit = 0
 
 # Path to file containing PEM encoded ed25519 identity private key, for use in ED25519 based self signed certs
 # private_ed25519_identity_key_file = '/etc/nym/keys/ssh_ed25519_identity.pem'

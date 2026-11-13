@@ -194,8 +194,8 @@ stateless_retry = false
 # Address to listen on
 listen = "[::]:4443"
 
-# Client address to block for sending, be default this is set by the OS on connection handling.
-# block = "[2a01::1234]:5000" 
+# Client IP address to block.
+# block = "2a01::1234"
 
 # Maximum number of concurrent connections to allow
 # connection_limit = 0
@@ -215,6 +215,9 @@ transport_type = "tls_plain"
 # Address to listen on
 listen = "[::]:4443"
 
+# Client IP address to block.
+# block = "2a01::1234"
+
 # Maximum number of concurrent connections to allow
 # connection_limit = 0
 
@@ -232,6 +235,9 @@ transport_type = "ssh_plain"
 [transports.args]
 # Address to listen on
 listen = "[::]:4422"
+
+# Maximum number of concurrent connections to allow
+# connection_limit = 0
 
 # Path to file containing PKCS8 PEM encoded ed25519 identity private key, used as the SSH host key
 private_ed25519_identity_key_file = '/home/nym/.nym/nym-nodes/default-nym-node/data/ssh_ed25519_identity.pem'

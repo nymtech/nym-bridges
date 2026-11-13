@@ -155,7 +155,12 @@ async fn launch_quic_listener(
                         {
                             info!("refusing due to open connection limit");
                             conn.refuse();
-                        } else if Some(conn.remote_address()) == options.block {
+                        // Both sides are canonicalized: a dual-stack `[::]` listener can report an
+                        // IPv4 peer as an IPv4-mapped IPv6 address, which would otherwise never
+                        // match an operator-configured plain IPv4 `block` value.
+                        } else if Some(conn.remote_address().ip().to_canonical())
+                            == options.block.map(|b| b.to_canonical())
+                        {
                             info!("refusing blocked client IP address");
                             conn.refuse();
                         } else if options.stateless_retry && !conn.remote_address_validated() {
@@ -186,6 +191,9 @@ async fn launch_tls_listener(
     let listener = tokio::net::TcpListener::bind(&options.listen).await?;
     tracing::info!("tls transport listening on {}", &options.listen);
 
+    // Counted up on accept, down when the connection's task finishes. A panic inside the
+    // connection-handling task (none are known today - no unwrap/expect in that path) would
+    // leak one count permanently rather than double-free it; accepted as a known limitation.
     let open_connections = Arc::new(AtomicUsize::new(0));
 
     loop {
@@ -205,7 +213,7 @@ async fn launch_tls_listener(
                 {
                     info!("refusing due to open connection limit");
                     continue;
-                } else if Some(address) == options.block {
+                } else if Some(address.ip().to_canonical()) == options.block.map(|b| b.to_canonical()) {
                     info!("refusing blocked client IP address");
                     continue;
                 }
@@ -260,6 +268,9 @@ async fn launch_ssh_listener(
     let listener = tokio::net::TcpListener::bind(&options.listen).await?;
     tracing::info!("ssh transport listening on {}", &options.listen);
 
+    // Counted up on accept, down when the connection's task finishes. A panic inside the
+    // connection-handling task (none are known today - no unwrap/expect in that path) would
+    // leak one count permanently rather than double-free it; accepted as a known limitation.
     let open_connections = Arc::new(AtomicUsize::new(0));
 
     loop {

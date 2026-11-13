@@ -1,6 +1,11 @@
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::RawFd;
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
@@ -24,8 +29,8 @@ pub struct ServerConfig {
     /// Address to listen on
     pub listen: SocketAddr,
 
-    /// Client address to block
-    pub block: Option<SocketAddr>,
+    /// Client IP address to block
+    pub block: Option<IpAddr>,
 
     /// Maximum number of concurrent connections to allow
     pub connection_limit: Option<usize>,

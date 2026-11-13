@@ -903,3 +903,40 @@ async fn server_rejects_x11_request() {
         other => panic!("expected X11 forwarding request to be rejected, got {other:?}"),
     }
 }
+
+fn server_cfg_with_banner(banner: Option<&str>) -> ServerConfig {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    ServerConfig {
+        identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
+        banner: banner.map(str::to_string),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn unconfigured_banner_falls_back_to_a_generic_identification_string() {
+    match server_cfg_with_banner(None)
+        .build_server_config()
+        .unwrap()
+        .server_id
+    {
+        russh::SshId::Standard(id) => {
+            assert_eq!(id, "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu3.6");
+        }
+        other => panic!("expected a Standard id, got {other:?}"),
+    }
+}
+
+#[test]
+fn configured_banner_is_used_verbatim() {
+    match server_cfg_with_banner(Some("SSH-2.0-my-custom-banner"))
+        .build_server_config()
+        .unwrap()
+        .server_id
+    {
+        russh::SshId::Standard(id) => {
+            assert_eq!(id, "SSH-2.0-my-custom-banner");
+        }
+        other => panic!("expected a Standard id, got {other:?}"),
+    }
+}

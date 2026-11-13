@@ -150,7 +150,7 @@ impl ServerConfig {
         let server_id = self
             .banner
             .clone()
-            .unwrap_or_else(|| "SSH-2.0-OpenSSH_9.6".to_string());
+            .unwrap_or_else(|| "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu3.6".to_string());
         config.server_id = russh::SshId::Standard(std::borrow::Cow::Owned(server_id));
 
         Ok(config)
