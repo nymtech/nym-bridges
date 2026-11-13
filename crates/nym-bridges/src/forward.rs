@@ -53,6 +53,8 @@ const LENGTH_DELIMITER_BYTELEN: usize = 2;
 /// How long [`initiator::process_udp`] waits for the first datagram (used to
 /// discover the peer address) before giving up.
 const INITIAL_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the closing close_notify (or transport equivalent) gets before giving up on it.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Distinguishes how a forwarder's UDP socket should receive and send datagrams,
 /// so the shared task loops below can be reused across both use cases.
@@ -178,9 +180,17 @@ where
                 }
 
                 trace!(" <-{fwd_addr} read {len}B");
-                if let Err(e) = framed_writer.send(dn_buf.copy_to_bytes(len)).await {
-                    error!("error sending to transport connection: {e}");
-                    break Err(e);
+                tokio::select! {
+                    res = framed_writer.send(dn_buf.copy_to_bytes(len)) => {
+                        if let Err(e) = res {
+                            error!("error sending to transport connection: {e}");
+                            break Err(e);
+                        }
+                    }
+                    _ = token.cancelled() => {
+                        debug!("end io copy from {fwd_addr}<->{tr_label}");
+                        break Ok(());
+                    }
                 }
                 trace!(" {tr_label}<- wrote {len}B");
 
@@ -197,11 +207,11 @@ where
         }
     };
 
-    // Always attempt a clean shutdown of the transport write side so a proper
-    // TLS close_notify (or transport-equivalent) is sent instead of just
-    // dropping the socket, regardless of why the loop above ended.
-    if let Err(e) = framed_writer.close().await {
-        debug!("error closing transport connection: {e}");
+    // Bounded so a stalled write can't hang this task forever.
+    match tokio::time::timeout(CLOSE_TIMEOUT, framed_writer.close()).await {
+        Ok(Err(e)) => debug!("error closing transport connection: {e}"),
+        Err(_) => debug!("timed out closing transport connection"),
+        Ok(Ok(())) => {}
     }
 
     result
@@ -301,6 +311,71 @@ where
         if let Some(token) = token.take() {
             token.cancel();
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use tokio::net::UdpSocket;
+
+    use super::*;
+
+    /// A `Sink` whose writes never complete, standing in for a stalled transport.
+    struct NeverReadySink;
+
+    impl Sink<bytes::Bytes> for NeverReadySink {
+        type Error = io::Error;
+
+        fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+
+        fn start_send(self: Pin<&mut Self>, _item: bytes::Bytes) -> io::Result<()> {
+            unreachable!("poll_ready never returns Ready, so this is never called")
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+
+        // Resolves immediately - this test targets the write, not CLOSE_TIMEOUT.
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn udp_to_transport_task_is_unblocked_by_cancellation_during_a_stalled_write() {
+        let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let sock_addr = sock.local_addr().unwrap();
+        let peer_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let fwd_addr = peer_sock.local_addr().unwrap();
+        sock.connect(fwd_addr).await.unwrap();
+
+        let token = CancellationToken::new();
+        let task = tokio::spawn(udp_to_transport_task(
+            ConnectedPeer,
+            sock,
+            NeverReadySink,
+            fwd_addr,
+            "test",
+            ETHERNET_V2_MTU,
+            token.clone(),
+        ));
+
+        // Get it into the send branch, where NeverReadySink blocks it forever.
+        peer_sock.send_to(b"hello", sock_addr).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        token.cancel();
+
+        tokio::time::timeout(Duration::from_millis(200), task)
+            .await
+            .expect("cancellation should interrupt a stalled transport write, not hang")
+            .unwrap()
+            .ok();
     }
 }
 
