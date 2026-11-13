@@ -1,7 +1,7 @@
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::{AsRawFd, RawFd};
 use std::{
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -61,8 +61,8 @@ pub struct ServerConfig {
     pub stateless_retry: bool,
     /// Address to listen on
     pub listen: SocketAddr,
-    /// Client address to block
-    pub block: Option<SocketAddr>,
+    /// Client IP address to block
+    pub block: Option<IpAddr>,
     /// Maximum number of concurrent connections to allow
     pub connection_limit: Option<usize>,
 

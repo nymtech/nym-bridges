@@ -26,6 +26,7 @@ async fn spawn_test_server() -> (SocketAddr, String) {
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
+        block: None,
         identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
         private_ed25519_identity_key_file: None,
         expected_username: None,
@@ -172,6 +173,7 @@ async fn client_server_handshake_and_echo() {
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
+        block: None,
         identity_key: Some(identity_key),
         private_ed25519_identity_key_file: None,
         expected_username: None,
@@ -244,6 +246,7 @@ async fn client_rejects_mismatched_host_key() {
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
+        block: None,
         identity_key: Some(identity_key),
         private_ed25519_identity_key_file: None,
         expected_username: None,
@@ -293,6 +296,7 @@ async fn client_rejects_mismatched_username() {
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
+        block: None,
         identity_key: Some(identity_key),
         private_ed25519_identity_key_file: None,
         expected_username: None,
@@ -345,6 +349,7 @@ async fn client_rejects_mismatched_auth_key() {
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
+        block: None,
         identity_key: Some(identity_key),
         private_ed25519_identity_key_file: None,
         expected_username: None,
@@ -516,6 +521,7 @@ async fn server_presents_configured_banner_as_ssh_id() {
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
+        block: None,
         identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
         private_ed25519_identity_key_file: None,
         expected_username: None,
@@ -567,6 +573,7 @@ fn server_config_uses_hardened_session_defaults() {
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
+        block: None,
         identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
         private_ed25519_identity_key_file: None,
         expected_username: None,
@@ -608,6 +615,7 @@ async fn connection_survives_idle_lull_via_client_keepalives() {
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
+        block: None,
         identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
         private_ed25519_identity_key_file: None,
         expected_username: None,
@@ -694,6 +702,7 @@ async fn server_honors_configured_expected_username() {
     let server_cfg = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         connection_limit: None,
+        block: None,
         identity_key: Some(identity_key),
         private_ed25519_identity_key_file: None,
         expected_username: Some("custom_user".into()),
@@ -901,5 +910,42 @@ async fn server_rejects_x11_request() {
     match channel.wait().await {
         Some(ChannelMsg::Failure) => {}
         other => panic!("expected X11 forwarding request to be rejected, got {other:?}"),
+    }
+}
+
+fn server_cfg_with_banner(banner: Option<&str>) -> ServerConfig {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    ServerConfig {
+        identity_key: Some(BASE64_STANDARD.encode(signing_key.to_bytes())),
+        banner: banner.map(str::to_string),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn unconfigured_banner_falls_back_to_a_generic_identification_string() {
+    match server_cfg_with_banner(None)
+        .build_server_config()
+        .unwrap()
+        .server_id
+    {
+        russh::SshId::Standard(id) => {
+            assert_eq!(id, "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu3.6");
+        }
+        other => panic!("expected a Standard id, got {other:?}"),
+    }
+}
+
+#[test]
+fn configured_banner_is_used_verbatim() {
+    match server_cfg_with_banner(Some("SSH-2.0-my-custom-banner"))
+        .build_server_config()
+        .unwrap()
+        .server_id
+    {
+        russh::SshId::Standard(id) => {
+            assert_eq!(id, "SSH-2.0-my-custom-banner");
+        }
+        other => panic!("expected a Standard id, got {other:?}"),
     }
 }

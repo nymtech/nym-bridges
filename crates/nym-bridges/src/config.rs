@@ -236,6 +236,7 @@ mod test {
         };
         let tls_cfg1 = tls::ServerConfig {
             listen: "[::1]:4443".parse().unwrap(),
+            block: Default::default(),
             connection_limit: Default::default(),
             identity_key: Some("fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=".into()),
             private_ed25519_identity_key_file: None,
@@ -361,6 +362,7 @@ listen = "[::]:4422"
         };
         let tls_cfg1 = tls::ServerConfig {
             listen: "[::1]:4443".parse().unwrap(),
+            block: Default::default(),
             connection_limit: Default::default(),
             identity_key: Some("fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=".into()),
             private_ed25519_identity_key_file: None,
@@ -368,6 +370,7 @@ listen = "[::]:4422"
         let ssh_cfg1 = ssh::ServerConfig {
             listen: "[::1]:4422".parse().unwrap(),
             connection_limit: Default::default(),
+            block: Default::default(),
             identity_key: Some("fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=".into()),
             private_ed25519_identity_key_file: None,
             expected_username: Some("root".into()),

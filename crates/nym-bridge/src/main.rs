@@ -6,6 +6,7 @@ use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -154,7 +155,12 @@ async fn launch_quic_listener(
                         {
                             info!("refusing due to open connection limit");
                             conn.refuse();
-                        } else if Some(conn.remote_address()) == options.block {
+                        // Both sides are canonicalized: a dual-stack `[::]` listener can report an
+                        // IPv4 peer as an IPv4-mapped IPv6 address, which would otherwise never
+                        // match an operator-configured plain IPv4 `block` value.
+                        } else if Some(conn.remote_address().ip().to_canonical())
+                            == options.block.map(|b| b.to_canonical())
+                        {
                             info!("refusing blocked client IP address");
                             conn.refuse();
                         } else if options.stateless_retry && !conn.remote_address_validated() {
@@ -185,6 +191,11 @@ async fn launch_tls_listener(
     let listener = tokio::net::TcpListener::bind(&options.listen).await?;
     tracing::info!("tls transport listening on {}", &options.listen);
 
+    // Counted up on accept, down when the connection's task finishes. A panic inside the
+    // connection-handling task (none are known today - no unwrap/expect in that path) would
+    // leak one count permanently rather than double-free it; accepted as a known limitation.
+    let open_connections = Arc::new(AtomicUsize::new(0));
+
     loop {
         tokio::select! {
             // Use the provided token to listen to cancellation requests
@@ -195,15 +206,39 @@ async fn launch_tls_listener(
             }
             res = listener.accept() => {
                 let (stream, address) = res?;
+
+                if options
+                    .connection_limit
+                    .is_some_and(|n| open_connections.load(Ordering::Relaxed) >= n)
+                {
+                    info!("refusing due to open connection limit");
+                    continue;
+                } else if Some(address.ip().to_canonical()) == options.block.map(|b| b.to_canonical()) {
+                    info!("refusing blocked client IP address");
+                    continue;
+                }
+
                 let acceptor = acceptor.clone();
                 let client_token = token.clone();
                 let fwd = fwd_cfg.clone();
+                let open_connections = open_connections.clone();
+                open_connections.fetch_add(1, Ordering::Relaxed);
 
                 let fut = async move {
-                    let stream = acceptor.accept(stream).await?;
+                    let stream = match acceptor.accept(stream).await {
+                        Ok(stream) => stream,
+                        Err(e) => {
+                            warn!("tls handshake failed from {address}: {e}");
+                            open_connections.fetch_sub(1, Ordering::Relaxed);
+                            return Ok(());
+                        }
+                    };
                     let session_cancel = client_token;
 
-                    tokio::spawn(handle_tls_connection(stream, address, fwd, session_cancel));
+                    tokio::spawn(async move {
+                        handle_tls_connection(stream, address, fwd, session_cancel).await;
+                        open_connections.fetch_sub(1, Ordering::Relaxed);
+                    });
 
                     Ok(()) as Result<()>
                 };
@@ -233,6 +268,11 @@ async fn launch_ssh_listener(
     let listener = tokio::net::TcpListener::bind(&options.listen).await?;
     tracing::info!("ssh transport listening on {}", &options.listen);
 
+    // Counted up on accept, down when the connection's task finishes. A panic inside the
+    // connection-handling task (none are known today - no unwrap/expect in that path) would
+    // leak one count permanently rather than double-free it; accepted as a known limitation.
+    let open_connections = Arc::new(AtomicUsize::new(0));
+
     loop {
         tokio::select! {
             // Use the provided token to listen to cancellation requests
@@ -243,10 +283,25 @@ async fn launch_ssh_listener(
             }
             res = listener.accept() => {
                 let (stream, address) = res?;
+
+                if options
+                    .connection_limit
+                    .is_some_and(|n| open_connections.load(Ordering::Relaxed) >= n)
+                {
+                    info!("refusing due to open connection limit");
+                    continue;
+                } else if Some(address.ip().to_canonical()) == options.block.map(|b| b.to_canonical())
+                {
+                    info!("refusing blocked client IP address");
+                    continue;
+                }
+
                 let config = config.clone();
                 let expected_username = expected_username.clone();
                 let client_token = token.clone();
                 let fwd = fwd_cfg.clone();
+                let open_connections = open_connections.clone();
+                open_connections.fetch_add(1, Ordering::Relaxed);
 
                 tokio::spawn(async move {
                     match ssh::accept(config, expected_username, expected_client_pubkey, stream).await {
@@ -260,6 +315,7 @@ async fn launch_ssh_listener(
                             warn!("ssh handshake failed: {err}");
                         }
                     }
+                    open_connections.fetch_sub(1, Ordering::Relaxed);
                 });
             }
         }

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking config change:** `block` on the QUIC and TLS transports is now a plain IP address instead of a socket address (e.g. `block = "2a01::1234"`, no port). If you had `block` set with a port, drop it when upgrading - the old form will fail to parse. SSH gains the same `block` option, newly.
+
+### Added
+
+- SSH transport now enforces the `block` IP list and `connection_limit`, matching QUIC and TLS
+- QUIC and TLS now compare the blocked IP after canonicalizing both sides, so a dual-stack listener reporting an IPv4 peer as an IPv4-mapped IPv6 address still matches a plain IPv4 `block` entry
+- SSH presents a generic identification banner by default instead of the underlying library's own name and version
+- TLS handshake failures are now logged with peer address and reason, matching QUIC and SSH
+
 ## [0.3.1] - 2026-11-12
 
 ### Fixed

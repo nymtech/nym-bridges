@@ -1,6 +1,11 @@
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::RawFd;
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
@@ -69,6 +74,9 @@ pub struct ServerConfig {
     /// Maximum number of concurrent connections to allow
     pub connection_limit: Option<usize>,
 
+    /// Client IP address to block
+    pub block: Option<IpAddr>,
+
     /// Base64 encoded Identity Key, for use as the ed25519 SSH host key. Used only if
     /// `private_ed25519_identity_key_file` is not provided.
     pub identity_key: Option<String>,
@@ -103,6 +111,7 @@ impl Default for ServerConfig {
         Self {
             listen: DEFAULT_SOCK_ADDR.parse().unwrap(),
             connection_limit: Default::default(),
+            block: Default::default(),
             identity_key: Default::default(),
             private_ed25519_identity_key_file: Default::default(),
             expected_username: Default::default(),
@@ -145,9 +154,13 @@ impl ServerConfig {
             },
             ..Default::default()
         };
-        if let Some(ref banner) = self.banner {
-            config.server_id = russh::SshId::Standard(std::borrow::Cow::Owned(banner.clone()));
-        }
+        // Fall back to a generic identification string rather than leaving the underlying
+        // library's own name and version as the default, even for an operator who hasn't set one.
+        let server_id = self
+            .banner
+            .clone()
+            .unwrap_or_else(|| "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu3.6".to_string());
+        config.server_id = russh::SshId::Standard(std::borrow::Cow::Owned(server_id));
 
         Ok(config)
     }
