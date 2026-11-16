@@ -673,10 +673,11 @@ mod tests {
                 .any(|addr| addr.contains("[2400:8901::2000:faff:fea6:87f2]:4443"))
         );
 
-        // Verify host field
-        assert_eq!(
-            parsed["transports"][0]["args"]["host"],
-            "netdna.bootstrapcdn.com"
+        // Host is picked per-node, not a fixed value -- see `nym_bridges::config::disguise_host`.
+        assert!(
+            parsed["transports"][0]["args"]["host"]
+                .as_str()
+                .is_some_and(|h| !h.is_empty())
         );
 
         println!("Generated QUIC client config: {}", client_json);

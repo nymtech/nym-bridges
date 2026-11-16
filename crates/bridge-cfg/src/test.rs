@@ -532,6 +532,28 @@ fn refresh_leaves_unchanged_files_untouched() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn refresh_rewrites_a_stale_hardcoded_disguise_host() -> Result<()> {
+    init_subscriber(None);
+    let tmp_dir = TempDir::new("bridges")?;
+    let (args, _) = generate_for_refresh(&tmp_dir)?;
+    let client_params_path = args
+        .out_dir
+        .join(ConfigArgs::DEFAULT_BRIDGE_CLIENT_CONFIG_FILENAME);
+
+    // simulate a pre-upgrade file still carrying the old shared disguise host.
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&client_params_path)?)?;
+    parsed["transports"][0]["args"]["host"] = "netdna.bootstrapcdn.com".into();
+    std::fs::write(&client_params_path, parsed.to_string())?;
+
+    args.refresh_config_files()?;
+
+    let refreshed = std::fs::read_to_string(&client_params_path)?;
+    assert!(!refreshed.contains("netdna.bootstrapcdn.com"));
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn generated_files_are_private_and_rewrites_keep_mode() -> Result<()> {

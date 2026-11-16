@@ -149,6 +149,25 @@ fn parse_file(config_path: PathBuf) -> Result<PersistedClientConfig> {
     parse_persisted_config(config_str)
 }
 
+/// SNI candidates, chosen so blocking one costs the censor collateral damage.
+const DISGUISE_HOSTS: &[&str] = &[
+    "www.bing.com",
+    "www.microsoft.com",
+    "m.media-amazon.com",
+    "www.apple.com",
+    "www.samsung.com",
+];
+
+/// Stable per-`id_pubkey` pick from [`DISGUISE_HOSTS`], so a node's SNI survives repeated
+/// `bridge-cfg` runs without a persisted field.
+fn disguise_host(id_pubkey: &str) -> String {
+    // FNV-1a -- order-sensitive, not a security boundary, just needs to spread picks.
+    let hash = id_pubkey.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100000001b3)
+    });
+    DISGUISE_HOSTS[hash as usize % DISGUISE_HOSTS.len()].to_string()
+}
+
 impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
     type Error = anyhow::Error;
     fn try_from(value: &PersistedServerConfig) -> Result<Self> {
@@ -171,7 +190,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
                     transports.push(ClientConfig::QuicPlain(quic::ClientOptions {
                         addresses,
-                        host: Some("netdna.bootstrapcdn.com".to_string()),
+                        host: Some(disguise_host(&id_pubkey)),
                         id_pubkey,
                     }));
                 }
@@ -181,7 +200,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
                     transports.push(ClientConfig::TlsPlain(tls::ClientOptions {
                         addresses,
-                        host: Some("netdna.bootstrapcdn.com".to_string()),
+                        host: Some(disguise_host(&id_pubkey)),
                         id_pubkey,
                     }));
                 }
@@ -351,6 +370,26 @@ listen = "[::]:4422"
     }
 
     #[test]
+    fn disguise_host_is_stable_and_spreads_across_pubkeys() {
+        let a = "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=";
+        let b = "fditK5JfNM/88mLWd3ccbLasSrHA5dw1wj+/+1bfGWk=";
+
+        assert_eq!(disguise_host(a), disguise_host(a));
+        assert_ne!(disguise_host(a), disguise_host(b));
+    }
+
+    #[test]
+    fn disguise_host_covers_every_pool_entry() {
+        use std::collections::HashSet;
+
+        let seen: HashSet<_> = (0u32..200)
+            .map(|i| disguise_host(&format!("key-{i}")))
+            .collect();
+
+        assert_eq!(seen.len(), DISGUISE_HOSTS.len());
+    }
+
+    #[test]
     fn conversion() -> Result<()> {
         let quic_cfg1 = quic::ServerConfig {
             listen: "[::1]:4433".parse().unwrap(),
@@ -395,7 +434,7 @@ listen = "[::]:4422"
                 "192.168.0.1:4433".parse().unwrap(),
                 "[fe80::1]:4433".parse().unwrap(),
             ],
-            host: Some("netdna.bootstrapcdn.com".to_string()),
+            host: Some("www.samsung.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
         let expected_tls = tls::ClientOptions {
@@ -403,7 +442,7 @@ listen = "[::]:4422"
                 "192.168.0.1:4443".parse().unwrap(),
                 "[fe80::1]:4443".parse().unwrap(),
             ],
-            host: Some("netdna.bootstrapcdn.com".to_string()),
+            host: Some("www.samsung.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
         let expected_ssh = ssh::ClientOptions {
