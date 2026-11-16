@@ -1,0 +1,21 @@
+name: Fleet diversity audit
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: Audit SNI/port/transport diversity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run audit
+        env:
+          NODE_STATUS_API_URL: ${{ vars.NODE_STATUS_API_URL }}
+          ZULIP_BOT_EMAIL: ${{ secrets.ZULIP_BOT_EMAIL }}
+          ZULIP_BOT_KEY: ${{ secrets.ZULIP_BOT_KEY }}
+          ZULIP_CHANNEL: ${{ vars.ZULIP_FLEET_AUDIT_CHANNEL }}
+          ZULIP_TOPIC: "Fleet diversity audit"
+        run: .github/scripts/audit-fleet-diversity.sh
