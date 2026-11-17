@@ -107,7 +107,7 @@ mod test {
     #[test]
     fn historical_hosts_includes_legacy_and_current() {
         let hosts = historical_hosts("gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=");
-        assert!(hosts.contains(&LEGACY_SHARED_HOST.to_string()));
+        assert!(hosts.iter().any(|h| h == LEGACY_SHARED_HOST));
         assert!(hosts.contains(&disguise_host(
             "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU="
         )));
