@@ -94,6 +94,8 @@
 pub mod config;
 /// Runtime components for creating connections over configured transports.
 pub mod connection;
+/// Per-node disguise names shared between the client-facing config and server certificates.
+pub mod disguise;
 /// Crate-specific error types.
 pub mod error;
 /// Runtime components for forwarding client traffic over established transport connections.
