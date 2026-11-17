@@ -165,7 +165,7 @@ fn disguise_host(id_pubkey: &str) -> String {
     let hash = id_pubkey.bytes().fold(0xcbf29ce484222325u64, |h, b| {
         (h ^ b as u64).wrapping_mul(0x100000001b3)
     });
-    DISGUISE_HOSTS[hash as usize % DISGUISE_HOSTS.len()].to_string()
+    DISGUISE_HOSTS[(hash % DISGUISE_HOSTS.len() as u64) as usize].to_string()
 }
 
 impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {

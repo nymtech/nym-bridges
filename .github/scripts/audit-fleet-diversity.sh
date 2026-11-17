@@ -33,9 +33,13 @@ trap 'rm -f "$params_file"' EXIT
 
 while IFS= read -r ip; do
     [[ -z "$ip" ]] && continue
-    curl --fail --silent --max-time 5 "http://${ip}:8080/api/v1/bridges/client-params" \
-        >> "$params_file" 2>/dev/null || echo "warn: ${ip} did not respond, skipping" >&2
-    echo >> "$params_file"
+    response=$(curl --fail --silent --max-time 5 "http://${ip}:8080/api/v1/bridges/client-params" 2>/dev/null) \
+        || { echo "warn: ${ip} did not respond, skipping" >&2; continue; }
+    if ! jq -e . >/dev/null 2>&1 <<< "$response"; then
+        echo "warn: ${ip} returned invalid JSON, skipping" >&2
+        continue
+    fi
+    printf '%s\n' "$response" >> "$params_file"
 done <<< "$bridge_ips"
 
 total=$(grep -c . "$params_file" || true)
@@ -48,20 +52,26 @@ report=""
 check_field() {
     local label="$1" jq_filter="$2"
     local top value count share
-    top=$(jq -r "$jq_filter" "$params_file" 2>/dev/null \
-        | sort | uniq -c | sort -rn | head -1)
+    local advertised_def='def advertised: (.transports_v2 // []) as $v2 | if ($v2|length) > 0 then $v2 else (.transports // []) end;'
+    # Dedup within each node (one line) first, so a value repeated across that node's own
+    # transports (e.g. the same host on both QUIC and TLS) counts once, not once per transport.
+    top=$(while IFS= read -r line; do
+        jq -r "${advertised_def} ${jq_filter}" <<< "$line" 2>/dev/null | sort -u
+    done < "$params_file" | sort | uniq -c | sort -rn | head -1)
     count=$(echo "$top" | awk '{print $1}')
     value=$(echo "$top" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//')
     [[ -z "$count" ]] && return
-    share=$(awk -v c="$count" -v t="$total" 'BEGIN { printf "%.2f", c / t }')
-    if awk -v s="$share" -v m="$MAX_SHARE" 'BEGIN { exit !(s > m) }'; then
+    # Compare the raw count against the threshold scaled by total, not a rounded share, so a
+    # share just over MAX_SHARE (e.g. 51/101) isn't missed by display rounding (0.50).
+    if awk -v c="$count" -v t="$total" -v m="$MAX_SHARE" 'BEGIN { exit !(c > m * t) }'; then
+        share=$(awk -v c="$count" -v t="$total" 'BEGIN { printf "%.2f", c / t }')
         report="${report}- **${label}**: \`${value}\` shared by ${count}/${total} responding nodes (${share})\n"
     fi
 }
 
-check_field "SNI host" '.transports_v2[]?.args.host // empty'
-check_field "listen port" '.transports_v2[]?.args.addresses[0]? | split(":") | last'
-check_field "transport type" '.transports_v2[]?.transport_type // empty'
+check_field "SNI host" 'advertised[]?.args.host // empty'
+check_field "listen port" 'advertised[]?.args.addresses[0]? | split(":") | last'
+check_field "transport type" 'advertised[]?.transport_type // empty'
 
 if [[ -n "$report" ]]; then
     message=$(printf '**Fleet diversity audit: threshold exceeded**\n\n%b' "$report")
