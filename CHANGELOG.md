@@ -25,8 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Self-signed bridge certificates now carry a normal-looking ~1 year validity window instead of rcgen's default sentinel dates (1975-4096), which were visible in the ServerHello and were a passive fingerprint
-- The forwarder's transport write and close are now cancellation-aware and bounded, so a caller that cancels and awaits the forwarder's `JoinHandle` to redial in place no longer risks hanging indefinitely on a stalled write or close
+- Self-signed bridge certificates now carry a normal-looking ~1 year validity window instead of rcgen's default sentinel dates (1975-4096) - visible to anyone who completes a handshake (TLS 1.3 encrypts the certificate, so not to a purely passive observer)
+- The forwarder's steady-state UDP-to-transport write and close are now cancellation-aware and bounded, so a caller that cancels and awaits the forwarder's `JoinHandle` to redial in place no longer risks hanging on a stalled write or close in that loop (the initial peer-establishing write is a separate path and is not yet covered by this)
 
 ## [0.3.1] - 2026-11-12
 
