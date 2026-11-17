@@ -20,8 +20,11 @@ use crate::connection::make_socket;
 use crate::error::TransportError;
 use crate::transport::tls::certs::{IdentityBasedVerifier, ServerConfigSource};
 
-#[allow(unused)]
-pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
+/// `h3` first so upgraded clients match it, `hq-29` kept for clients that haven't upgraded yet.
+/// Doesn't hold up against an active prober: this listener still rejects an actual h3 stream.
+const ALPN_QUIC_SERVER: &[&[u8]] = &[b"h3", b"hq-29"];
+/// Drop `hq-29` once the fleet is confirmed upgraded - this is what a passive observer reads.
+const ALPN_QUIC_CLIENT: &[&[u8]] = &[b"h3", b"hq-29"];
 const DEFAULT_SOCK_ADDR: &str = "[::]:4443";
 
 /// Session Keepalive interval to prevent sessions from closing due to lull in user traffic.
@@ -145,7 +148,7 @@ impl crate::transport::ExternalizeKeyMaterial for ServerConfig {
 pub fn create_endpoint(options: &ServerConfig) -> Result<quinn::Endpoint, TransportError> {
     let mut server_crypto = options.build_server_config()?;
 
-    server_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
+    server_crypto.alpn_protocols = ALPN_QUIC_SERVER.iter().map(|&x| x.into()).collect();
 
     let mut server_config =
         quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
@@ -357,7 +360,7 @@ fn create_quic_config(options: &InnerClientOptions) -> Result<quinn::ClientConfi
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
 
-    client_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
+    client_crypto.alpn_protocols = ALPN_QUIC_CLIENT.iter().map(|&x| x.into()).collect();
     let quic_client_config = QuicClientConfig::try_from(client_crypto)
         .map_err(|e| TransportError::config_err(format!("invalid tls crypto config: {e}")))?;
 
