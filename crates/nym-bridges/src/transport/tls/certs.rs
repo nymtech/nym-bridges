@@ -194,7 +194,7 @@ impl ServerCertVerifier for IdentityBasedVerifier {
                 if cert.subject.iter_common_name().any(|cn| {
                     cn.as_str().is_ok_and(|v| {
                         trace!("  - CN = {v}");
-                        self.alt_names.contains(&v.to_string())
+                        self.alt_names.iter().any(|i| i == v)
                     })
                 }) {
                     trace!("✅ acceptable common name");
