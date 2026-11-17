@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking config change:** `block` on the QUIC and TLS transports is now a plain IP address instead of a socket address (e.g. `block = "2a01::1234"`, no port). If you had `block` set with a port, drop it when upgrading - the old form will fail to parse. SSH gains the same `block` option, newly.
-- QUIC now offers `h3` first (falling back to the legacy `hq-29` for clients that haven't upgraded), and TLS now negotiates a real-looking ALPN (`http/1.1` on the server, `h2`/`http/1.1` offered by the client) instead of none at all
+- QUIC now offers `h3` first (falling back to the legacy `hq-29` for clients that haven't upgraded), and TLS now negotiates a real-looking ALPN (`http/1.1` on the server, `h2`/`http/1.1` offered by the client) instead of none at all. The public `ALPN_QUIC_HTTP` constant is removed (it was unused outside this crate)
 
 ### Added
 
