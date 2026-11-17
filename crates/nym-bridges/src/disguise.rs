@@ -20,24 +20,31 @@ fn fnv1a(s: &str) -> u64 {
     })
 }
 
-/// Stable per-`id_pubkey` pick from [`DISGUISE_HOSTS`], so a node's SNI survives repeated
-/// `bridge-cfg` runs without a persisted field. Picks by rendezvous hashing (highest
-/// `fnv1a(id_pubkey + host)` wins) rather than `hash % len()`, so appending a host to the pool
-/// only ever reassigns pubkeys *to* the new entry - it never reshuffles who gets an existing
-/// one, which `% len()` would.
-pub fn disguise_host(id_pubkey: &str) -> String {
-    DISGUISE_HOSTS
-        .iter()
+/// Rendezvous-hashing pick (highest `fnv1a(id_pubkey + host)` wins): stable under growth, since
+/// appending a host never changes who wins between two hosts already in `pool`.
+fn pick(pool: &[&str], id_pubkey: &str) -> String {
+    pool.iter()
         .max_by_key(|host| fnv1a(&format!("{id_pubkey}{host}")))
-        .expect("DISGUISE_HOSTS is non-empty")
+        .expect("pool is non-empty")
         .to_string()
 }
 
-/// Every name a client holding *any* released descriptor for `id_pubkey` might send as SNI:
-/// the legacy shared host, and this node's current disguise host. Append-only - a future
-/// disguise pool adds a new entry here, it never removes one.
+/// Stable per-`id_pubkey` pick from [`DISGUISE_HOSTS`], so a node's SNI survives repeated
+/// `bridge-cfg` runs without a persisted field.
+pub fn disguise_host(id_pubkey: &str) -> String {
+    pick(DISGUISE_HOSTS, id_pubkey)
+}
+
+/// Every name a client holding any released descriptor might send as SNI: the legacy host, and
+/// this node's pick under every size the pool has ever been (its prefixes, since it only grows).
 pub fn historical_hosts(id_pubkey: &str) -> Vec<String> {
-    vec![LEGACY_SHARED_HOST.to_string(), disguise_host(id_pubkey)]
+    let mut hosts: Vec<String> = (1..=DISGUISE_HOSTS.len())
+        .map(|len| pick(&DISGUISE_HOSTS[..len], id_pubkey))
+        .collect();
+    hosts.sort_unstable();
+    hosts.dedup();
+    hosts.push(LEGACY_SHARED_HOST.to_string());
+    hosts
 }
 
 #[cfg(test)]
@@ -64,30 +71,36 @@ mod test {
         assert_eq!(seen.len(), DISGUISE_HOSTS.len());
     }
 
-    /// Appending a host to the pool must only ever reassign pubkeys *to* the new entry, never
-    /// reshuffle an assignment between two pre-existing entries - otherwise a node that upgrades
-    /// after such a change would stop matching clients still holding its old descriptor.
+    /// Growth only ever reassigns a pubkey *to* the new host, never between existing ones.
     #[test]
     fn disguise_host_growth_never_reshuffles_an_existing_pick() {
         let smaller_pool = &DISGUISE_HOSTS[..DISGUISE_HOSTS.len() - 1];
-        let grown_pool = DISGUISE_HOSTS;
         let new_host = DISGUISE_HOSTS[DISGUISE_HOSTS.len() - 1];
-
-        fn pick<'a>(pool: &[&'a str], id_pubkey: &str) -> &'a str {
-            pool.iter()
-                .max_by_key(|host| fnv1a(&format!("{id_pubkey}{host}")))
-                .copied()
-                .unwrap()
-        }
 
         for i in 0u32..200 {
             let id_pubkey = format!("key-{i}");
             let before = pick(smaller_pool, &id_pubkey);
-            let after = pick(grown_pool, &id_pubkey);
+            let after = pick(DISGUISE_HOSTS, &id_pubkey);
             assert!(
                 after == before || after == new_host,
                 "key-{i}: {before} -> {after} on growth (reshuffled, not just reassigned to the new host)"
             );
+        }
+    }
+
+    /// A pubkey's pre-growth pick stays recognised even after it's reassigned to a new host.
+    #[test]
+    fn historical_hosts_covers_every_pool_size_this_pubkey_has_ever_seen() {
+        for i in 0u32..200 {
+            let id_pubkey = format!("key-{i}");
+            let hosts = historical_hosts(&id_pubkey);
+            for len in 1..=DISGUISE_HOSTS.len() {
+                let pick_at_that_size = pick(&DISGUISE_HOSTS[..len], &id_pubkey);
+                assert!(
+                    hosts.contains(&pick_at_that_size),
+                    "key-{i}: historical_hosts is missing {pick_at_that_size:?}, this pubkey's pick under a {len}-entry pool"
+                );
+            }
         }
     }
 

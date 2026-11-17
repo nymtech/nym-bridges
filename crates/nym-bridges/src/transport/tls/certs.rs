@@ -710,9 +710,7 @@ mod test {
             .expect("server config build failed");
         let mut server = rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
 
-        // A client connecting by bare IP sends no SNI at all (TLS only sends SNI for DNS
-        // names), so this is the one real way a client omits it - not a DNS name the server
-        // has simply never seen, which a real client's own verifier would also reject.
+        // Bare IP omits SNI entirely (TLS only sends it for DNS names).
         let mut client = client_connection_for(
             &verif_key,
             "203.0.113.1",
@@ -726,10 +724,7 @@ mod test {
         );
     }
 
-    /// The descriptor `host` a client is told to use for a given pubkey (`disguise_host`, the
-    /// function `config.rs` calls when building a descriptor) is always one of the names the
-    /// resolver built from `into_server_config` for that same pubkey - otherwise a freshly
-    /// refreshed client would get a descriptor naming something the server never serves.
+    /// A fresh descriptor's `host` is always a name the resolver actually serves.
     #[test]
     fn descriptor_host_matches_a_name_the_resolver_actually_serves() {
         let signing_key: SigningKey = SigningKey::generate(&mut rand::rng());
