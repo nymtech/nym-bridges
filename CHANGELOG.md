@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2-rc.1] - 2026-11-17
+
 ### Changed
 
 - **Breaking config change:** `block` on the QUIC and TLS transports is now a plain IP address instead of a socket address (e.g. `block = "2a01::1234"`, no port). If you had `block` set with a port, drop it when upgrading - the old form will fail to parse. SSH gains the same `block` option, newly.
@@ -20,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SSH presents a generic identification banner by default instead of the underlying library's own name and version
 - TLS handshake failures are now logged with peer address and reason, matching QUIC and SSH
 - QUIC and TLS now present a certificate named after the SNI a client sends (the node's identity pubkey, the legacy shared disguise host, or this node's current disguise host), instead of always naming the certificate after the raw pubkey - every client, however old its descriptor, still gets a name it already accepts
+
+### Fixed
+
+- Self-signed bridge certificates now carry a normal-looking ~1 year validity window instead of rcgen's default sentinel dates (1975-4096), which were visible in the ServerHello and were a passive fingerprint
+- The forwarder's transport write and close are now cancellation-aware and bounded, so a caller that cancels and awaits the forwarder's `JoinHandle` to redial in place no longer risks hanging indefinitely on a stalled write or close
 
 ## [0.3.1] - 2026-11-12
 
