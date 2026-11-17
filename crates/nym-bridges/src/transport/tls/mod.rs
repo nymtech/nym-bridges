@@ -112,7 +112,10 @@ impl crate::transport::ExternalizeKeyMaterial for ServerConfig {
 }
 
 pub fn create_listener(options: &ServerConfig) -> Result<TlsAcceptor, TransportError> {
-    let server_crypto = options.build_server_config()?;
+    let mut server_crypto = options.build_server_config()?;
+
+    // Not `h2`: we don't speak HTTP/2 framing, and claiming it would itself be a probe tell.
+    server_crypto.alpn_protocols = vec![b"http/1.1".to_vec()];
 
     Ok(TlsAcceptor::from(Arc::new(server_crypto)))
 }
@@ -192,12 +195,14 @@ pub async fn transport_conn(
             ))
         })?;
 
-    let client_crypto = rustls::ClientConfig::builder_with_provider(crypto_provider)
+    let mut client_crypto = rustls::ClientConfig::builder_with_provider(crypto_provider)
         .with_protocol_versions(rustls::DEFAULT_VERSIONS)
         .map_err(|e| TransportError::other(format!("rustls client config init failed: {e}")))?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
+    // Ordinary browser ALPN list; server never offers `h2`, so it's never actually selected.
+    client_crypto.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     let connector = TlsConnector::from(Arc::new(client_crypto));
 
     // If no hostname is provided use the IP address of the first candidate as the hostname.
@@ -251,6 +256,14 @@ mod test {
                 .generate_config(&mut rand::rng())
                 .is_sufficient()
         );
+    }
+
+    #[test]
+    fn create_listener_offers_http1_1_only() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let server_cfg = ServerConfig::default().generate_config(&mut rand::rng());
+        let acceptor = create_listener(&server_cfg).unwrap();
+        assert_eq!(acceptor.config().alpn_protocols, vec![b"http/1.1".to_vec()]);
     }
 
     #[test]
