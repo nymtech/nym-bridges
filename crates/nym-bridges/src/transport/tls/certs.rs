@@ -656,6 +656,21 @@ mod test {
         rustls::ClientConnection::new(Arc::new(client_config), server_name).unwrap()
     }
 
+    /// The CN of the certificate the server actually presented, post-handshake.
+    fn served_cert_cn(client: &rustls::ClientConnection) -> String {
+        let der = client
+            .peer_certificates()
+            .and_then(|certs| certs.first())
+            .expect("handshake completed, so a peer certificate was presented");
+        let cert = parse_certificate(der).expect("server cert parses");
+        cert.subject
+            .iter_common_name()
+            .next()
+            .and_then(|cn| cn.as_str().ok())
+            .expect("server cert has a CN")
+            .to_string()
+    }
+
     /// A client on any descriptor generation (legacy host, current disguise host, or the raw
     /// pubkey) completes a handshake against [`ServerConfigSource::into_server_config`].
     #[test]
@@ -687,6 +702,11 @@ mod test {
             assert!(
                 drive_handshake(&mut client, &mut server),
                 "handshake failed for a client expecting SNI {sni:?}"
+            );
+            assert_eq!(
+                served_cert_cn(&client),
+                sni,
+                "server should have served a cert named after the SNI it received"
             );
         }
     }
@@ -721,6 +741,11 @@ mod test {
         assert!(
             drive_handshake(&mut client, &mut server),
             "handshake should still succeed via the resolver's default cert"
+        );
+        assert_eq!(
+            served_cert_cn(&client),
+            current_disguise,
+            "an unrecognized SNI should get the current disguise host's cert, not the pubkey's"
         );
     }
 

@@ -673,7 +673,7 @@ mod tests {
                 .any(|addr| addr.contains("[2400:8901::2000:faff:fea6:87f2]:4443"))
         );
 
-        // Host is picked per-node, not a fixed value -- see `nym_bridges::config::disguise_host`.
+        // Host is picked per-node, not a fixed value -- see `nym_bridges::disguise::disguise_host`.
         assert!(
             parsed["transports"][0]["args"]["host"]
                 .as_str()
