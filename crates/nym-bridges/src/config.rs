@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::disguise::disguise_host;
 use crate::transport::{quic, ssh, tls};
 
 // ====================================[ Server Side ]====================================
@@ -171,7 +172,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
                     transports.push(ClientConfig::QuicPlain(quic::ClientOptions {
                         addresses,
-                        host: Some("netdna.bootstrapcdn.com".to_string()),
+                        host: Some(disguise_host(&id_pubkey)),
                         id_pubkey,
                     }));
                 }
@@ -181,7 +182,7 @@ impl TryFrom<&PersistedServerConfig> for PersistedClientConfig {
                     let id_pubkey = cfg.get_id_pubkey()?.to_string();
                     transports.push(ClientConfig::TlsPlain(tls::ClientOptions {
                         addresses,
-                        host: Some("netdna.bootstrapcdn.com".to_string()),
+                        host: Some(disguise_host(&id_pubkey)),
                         id_pubkey,
                     }));
                 }
@@ -395,7 +396,7 @@ listen = "[::]:4422"
                 "192.168.0.1:4433".parse().unwrap(),
                 "[fe80::1]:4433".parse().unwrap(),
             ],
-            host: Some("netdna.bootstrapcdn.com".to_string()),
+            host: Some("m.media-amazon.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
         let expected_tls = tls::ClientOptions {
@@ -403,7 +404,7 @@ listen = "[::]:4422"
                 "192.168.0.1:4443".parse().unwrap(),
                 "[fe80::1]:4443".parse().unwrap(),
             ],
-            host: Some("netdna.bootstrapcdn.com".to_string()),
+            host: Some("m.media-amazon.com".to_string()),
             id_pubkey: "gyKl6DN9hgdPGhEzdf9gY4Ha2GzrOwSzLCguxeTVTJU=".into(),
         };
         let expected_ssh = ssh::ClientOptions {

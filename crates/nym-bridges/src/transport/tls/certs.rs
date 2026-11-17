@@ -5,8 +5,9 @@
 //!
 //! The server:
 //! - has the ed25519 private key that all nodes have
-//! - uses this key to create a self-signed certificate
-//!   - sets the certificates common name to the base58 encoded identity key
+//! - uses this key to create a self-signed certificate per name a client might send as SNI
+//!   (identity key, legacy disguise host, current disguise host - `crate::disguise`), picked
+//!   per connection by [`SniCertResolver`]
 //!
 //! The client:
 //! - implements a custom certificate verifier that:
@@ -32,14 +33,16 @@ use rcgen::{Certificate, CertificateParams, DnType, KeyPair};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject};
-use rustls::server::VerifierBuilderError;
+use rustls::server::{ClientHello, ResolvesServerCert, VerifierBuilderError};
+use rustls::sign::CertifiedKey;
 use rustls::{CertificateError, DigitallySignedStruct, RootCertStore, SignatureScheme};
 use tracing::*;
 use webpki_roots::TLS_SERVER_ROOTS;
 use x509_parser::prelude::*;
 
-use std::{fmt::Debug, fs, path::Path, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, fs, path::Path, sync::Arc};
 
+use crate::disguise::{disguise_host, historical_hosts};
 use crate::error::TransportError;
 
 pub fn get_cert_signed_by_ed25519<'a>(
@@ -194,7 +197,7 @@ impl ServerCertVerifier for IdentityBasedVerifier {
                 if cert.subject.iter_common_name().any(|cn| {
                     cn.as_str().is_ok_and(|v| {
                         trace!("  - CN = {v}");
-                        self.alt_names.contains(&v.to_string())
+                        self.alt_names.iter().any(|i| i == v)
                     })
                 }) {
                     trace!("✅ acceptable common name");
@@ -291,6 +294,24 @@ impl ServerCertVerifier for IdentityBasedVerifier {
     }
 }
 
+/// Picks a certificate by SNI; unrecognized or missing SNI gets the current disguise host.
+#[derive(Debug)]
+struct SniCertResolver {
+    by_sni: HashMap<String, Arc<CertifiedKey>>,
+    default: Arc<CertifiedKey>,
+}
+
+impl ResolvesServerCert for SniCertResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        // rustls lowercases the incoming SNI here; the pubkey name is mixed-case, so match it.
+        let cert = client_hello
+            .server_name()
+            .and_then(|sni| self.by_sni.get(&sni.to_ascii_lowercase()))
+            .unwrap_or(&self.default);
+        Some(cert.clone())
+    }
+}
+
 pub struct ServerConfigSource([u8; 32]);
 
 impl ServerConfigSource {
@@ -327,13 +348,44 @@ impl ServerConfigSource {
         let signing_key = SigningKey::from_bytes(&key_bytes);
         let verif_key = signing_key.verifying_key();
         let pubkey_as_sn = bs58::encode(verif_key.to_bytes()).into_string();
-        let (cert, key) = get_cert_signed_by_ed25519(pubkey_as_sn, &signing_key)?;
+        let id_pubkey_base64 = BASE64_STANDARD.encode(verif_key.to_bytes());
+        let current_disguise = disguise_host(&id_pubkey_base64);
 
-        let (certs, key) = (vec![cert.der().clone()], key);
+        // Other names a client might still send as SNI: the legacy host, and the pubkey.
+        let mut other_names = historical_hosts(&id_pubkey_base64);
+        other_names.retain(|name| name != &current_disguise);
+        other_names.push(pubkey_as_sn);
+
+        let crypto_provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(rustls::crypto::ring::default_provider()));
+
+        // Build the default (current disguise host) first so it never depends on a lookup.
+        let (default_cert, default_key_der) =
+            get_cert_signed_by_ed25519(current_disguise.clone(), &signing_key)?;
+        let signing_key_arc = crypto_provider
+            .key_provider
+            .load_private_key(default_key_der.clone_key())?;
+        let default = Arc::new(CertifiedKey::new(
+            vec![default_cert.der().clone()],
+            signing_key_arc.clone(),
+        ));
+
+        let mut by_sni = HashMap::with_capacity(other_names.len() + 1);
+        by_sni.insert(current_disguise.to_ascii_lowercase(), default.clone());
+        for name in other_names {
+            let (cert, _) = get_cert_signed_by_ed25519(name.clone(), &signing_key)?;
+            let certified = Arc::new(CertifiedKey::new(
+                vec![cert.der().clone()],
+                signing_key_arc.clone(),
+            ));
+            // Keyed lowercase to match `resolve`'s lookup; the cert itself keeps `name`'s case.
+            by_sni.insert(name.to_ascii_lowercase(), certified);
+        }
 
         Ok(rustls::ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(certs, key)?)
+            .with_cert_resolver(Arc::new(SniCertResolver { by_sni, default })))
     }
 
     pub fn public_identity(&self) -> [u8; 32] {
@@ -510,10 +562,20 @@ mod test {
 
         let mut server = rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
 
+        assert!(
+            drive_handshake(&mut client, &mut server),
+            "handshake did not complete"
+        );
+    }
+
+    /// Drives a client/server handshake over in-memory pipes; returns whether it completed.
+    fn drive_handshake(
+        client: &mut rustls::ClientConnection,
+        server: &mut rustls::ServerConnection,
+    ) -> bool {
         let (mut server_rx, mut client_tx) = std::io::pipe().unwrap();
         let (mut client_rx, mut server_tx) = std::io::pipe().unwrap();
 
-        // Perform handshake
         let mut handshake_complete = false;
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
@@ -521,7 +583,6 @@ mod test {
         while !handshake_complete && iterations < MAX_ITERATIONS {
             iterations += 1;
             let mut progress = false;
-            // Client side
             if client.wants_write() {
                 client.write_tls(&mut client_tx).unwrap();
                 progress = true;
@@ -531,7 +592,9 @@ mod test {
                 match server.read_tls(&mut server_rx) {
                     Ok(0) => break, // EOF
                     Ok(_) => {
-                        server.process_new_packets().unwrap();
+                        if server.process_new_packets().is_err() {
+                            return false;
+                        }
                         progress = true;
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -548,7 +611,9 @@ mod test {
                 match client.read_tls(&mut client_rx) {
                     Ok(0) => break, // EOF
                     Ok(_) => {
-                        client.process_new_packets().unwrap();
+                        if client.process_new_packets().is_err() {
+                            return false;
+                        }
                         progress = true;
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -556,19 +621,143 @@ mod test {
                 }
             }
 
-            // Check if handshake is complete
             handshake_complete = !client.is_handshaking() && !server.is_handshaking();
 
-            // If no progress was made, break to avoid infinite loop
             if !progress {
                 break;
             }
         }
 
-        assert!(
-            handshake_complete,
-            "Handshake did not complete within {MAX_ITERATIONS} iterations",
+        handshake_complete
+    }
+
+    /// A client sending `sni` as its own server name, accepting the pubkey plus `accepted_name`
+    /// (the name it expects back - not necessarily `sni` itself).
+    fn client_connection_for(
+        server_pubkey: &VerifyingKey,
+        sni: &str,
+        accepted_name: &str,
+        crypto_provider: Arc<rustls::crypto::CryptoProvider>,
+    ) -> rustls::ClientConnection {
+        let verifier = IdentityBasedVerifier::builder(server_pubkey)
+            .with_alt_names(Some(vec![sni.to_string(), accepted_name.to_string()]))
+            .with_crypto_provider(crypto_provider.clone())
+            .build()
+            .expect("failed to initialize tls cert verifier");
+
+        let client_config = rustls::ClientConfig::builder_with_provider(crypto_provider)
+            .with_protocol_versions(rustls::DEFAULT_VERSIONS)
+            .expect("rustls client config init failed")
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
+            .with_no_client_auth();
+
+        let server_name: ServerName = sni.to_string().try_into().unwrap();
+        rustls::ClientConnection::new(Arc::new(client_config), server_name).unwrap()
+    }
+
+    /// The CN of the certificate the server actually presented, post-handshake.
+    fn served_cert_cn(client: &rustls::ClientConnection) -> String {
+        let der = client
+            .peer_certificates()
+            .and_then(|certs| certs.first())
+            .expect("handshake completed, so a peer certificate was presented");
+        let cert = parse_certificate(der).expect("server cert parses");
+        cert.subject
+            .iter_common_name()
+            .next()
+            .and_then(|cn| cn.as_str().ok())
+            .expect("server cert has a CN")
+            .to_string()
+    }
+
+    /// A client on any descriptor generation (legacy host, current disguise host, or the raw
+    /// pubkey) completes a handshake against [`ServerConfigSource::into_server_config`].
+    #[test]
+    fn sni_cert_resolver_accepts_every_generation_a_client_might_hold() {
+        // Needed once per test binary; `into_server_config` assumes it's already installed.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let signing_key: SigningKey = SigningKey::generate(&mut rand::rng());
+        let verif_key = signing_key.verifying_key();
+        let pubkey_as_sn = bs58::encode(verif_key.to_bytes()).into_string();
+        let id_pubkey_base64 = BASE64_STANDARD.encode(verif_key.to_bytes());
+        let current_disguise = disguise_host(&id_pubkey_base64);
+
+        let crypto_provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(rustls::crypto::ring::default_provider()));
+
+        for sni in [
+            crate::disguise::LEGACY_SHARED_HOST.to_string(),
+            current_disguise,
+            pubkey_as_sn,
+        ] {
+            let server_config = ServerConfigSource::from_identity(signing_key.to_bytes())
+                .into_server_config()
+                .expect("server config build failed");
+            let mut server = rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
+            let mut client = client_connection_for(&verif_key, &sni, &sni, crypto_provider.clone());
+
+            assert!(
+                drive_handshake(&mut client, &mut server),
+                "handshake failed for a client expecting SNI {sni:?}"
+            );
+            assert_eq!(
+                served_cert_cn(&client),
+                sni,
+                "server should have served a cert named after the SNI it received"
+            );
+        }
+    }
+
+    /// A client with an unrecognized or missing SNI still connects via the default cert.
+    #[test]
+    fn sni_cert_resolver_falls_back_to_the_current_disguise_host_for_unknown_sni() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let signing_key: SigningKey = SigningKey::generate(&mut rand::rng());
+        let verif_key = signing_key.verifying_key();
+        let id_pubkey_base64 = BASE64_STANDARD.encode(verif_key.to_bytes());
+        let current_disguise = disguise_host(&id_pubkey_base64);
+
+        let crypto_provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(rustls::crypto::ring::default_provider()));
+
+        let server_config = ServerConfigSource::from_identity(signing_key.to_bytes())
+            .into_server_config()
+            .expect("server config build failed");
+        let mut server = rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
+
+        // Bare IP omits SNI entirely (TLS only sends it for DNS names).
+        let mut client = client_connection_for(
+            &verif_key,
+            "203.0.113.1",
+            &current_disguise,
+            crypto_provider,
         );
+
+        assert!(
+            drive_handshake(&mut client, &mut server),
+            "handshake should still succeed via the resolver's default cert"
+        );
+        assert_eq!(
+            served_cert_cn(&client),
+            current_disguise,
+            "an unrecognized SNI should get the current disguise host's cert, not the pubkey's"
+        );
+    }
+
+    /// A fresh descriptor's `host` is always a name the resolver actually serves.
+    #[test]
+    fn descriptor_host_matches_a_name_the_resolver_actually_serves() {
+        let signing_key: SigningKey = SigningKey::generate(&mut rand::rng());
+        let verif_key = signing_key.verifying_key();
+        let id_pubkey_base64 = BASE64_STANDARD.encode(verif_key.to_bytes());
+        let descriptor_host = disguise_host(&id_pubkey_base64);
+
+        assert!(historical_hosts(&id_pubkey_base64).contains(&descriptor_host));
     }
 
     #[test]

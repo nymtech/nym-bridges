@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - QUIC and TLS now compare the blocked IP after canonicalizing both sides, so a dual-stack listener reporting an IPv4 peer as an IPv4-mapped IPv6 address still matches a plain IPv4 `block` entry
 - SSH presents a generic identification banner by default instead of the underlying library's own name and version
 - TLS handshake failures are now logged with peer address and reason, matching QUIC and SSH
+- QUIC and TLS now present a certificate named after the SNI a client sends (the node's identity pubkey, the legacy shared disguise host, or this node's current disguise host), instead of always naming the certificate after the raw pubkey - every client, however old its descriptor, still gets a name it already accepts
 
 ## [0.3.1] - 2026-11-12
 
