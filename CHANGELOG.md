@@ -8,10 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.2-rc.2] - 2026-11-18
+## [0.3.2-rc.3] - 2026-11-18
 
-Supersedes v0.3.2-rc.1, which was tagged against the wrong commit and never published
-anywhere - same content, no changes below.
+Supersedes v0.3.2-rc.1 and v0.3.2-rc.2, both tagged against the wrong commit and never
+published anywhere - same content, no changes below.
 
 ### Changed
 
