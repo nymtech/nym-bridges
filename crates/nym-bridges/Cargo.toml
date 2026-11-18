@@ -83,7 +83,7 @@ uuid.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
 webpki-roots.workspace = true
 
-nym-bridges-types = { path = "../nym-bridges-types", version = "0.3.2-rc.1" }
+nym-bridges-types = { path = "../nym-bridges-types", version = "0.3.2-rc.2" }
 
 
 [dev-dependencies]
