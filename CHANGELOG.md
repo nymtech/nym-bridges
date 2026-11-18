@@ -8,10 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.2-rc.3] - 2026-11-18
+## [0.4.0-rc.1] - 2026-11-18
 
-Supersedes v0.3.2-rc.1 and v0.3.2-rc.2, both tagged against the wrong commit and never
-published anywhere - same content, no changes below.
+Renamed from 0.3.2 to 0.4.0: this release has a breaking config change (`block`, below),
+and this project bumps the minor version for breaking changes on 0.x releases (see 0.3.0).
+Supersedes v0.3.2-rc.1 through rc.3, all tagged under the wrong version and never
+published anywhere - same content otherwise, no changes below.
 
 ### Changed
 
