@@ -22,12 +22,19 @@ list_ports() {
   awk -F"[\"']" '/^\[\[transports\]\]/ {t=""} /^[[:space:]]*transport_type[[:space:]]*=/ {t=$2} /^[[:space:]]*listen[[:space:]]*=/ && t != "" {n=split($2,a,":"); print t, a[n]}' "$1"
 }
 
-# 0.3.2 made `block` a plain IP address instead of a socket address; an older config may still
+# True once TAG's binary expects `block` as a plain IP (0.4.0+): dpkg's comparison, not the
+# tag's own text, decides this - an rc of 0.4.0 already expects it, an rc of 0.3.2 does not.
+target_expects_plain_block() {
+  dpkg --compare-versions "${1#v}" ge "0.4.0"
+}
+
+# 0.4.0 made `block` a plain IP address instead of a socket address; an older config may still
 # have a port on it, which the new binary refuses to parse. Strip it in place, if present.
+# Handles both quote styles TOML allows and a bare or quoted `block` key.
 migrate_block_field() {
   sed -i -E \
-    -e 's/^([[:space:]]*block[[:space:]]*=[[:space:]]*")\[([^]]+)\]:[0-9]+"/\1\2"/' \
-    -e 's/^([[:space:]]*block[[:space:]]*=[[:space:]]*")([0-9.]+):[0-9]+"/\1\2"/' \
+    -e "s/^([[:space:]]*\"?block\"?[[:space:]]*=[[:space:]]*)([\"'])\[([^]]+)\]:[0-9]+\2/\1\2\3\2/" \
+    -e "s/^([[:space:]]*\"?block\"?[[:space:]]*=[[:space:]]*)([\"'])([0-9.]+):[0-9]+\2/\1\2\3\2/" \
     "$1"
 }
 
@@ -76,7 +83,7 @@ before="$(quic_key)"
 echo "QUIC key before: $before"
 
 cp -a /etc/nym "$BAK"
-migrate_block_field "$CONF"
+target_expects_plain_block "$TAG" && migrate_block_field "$CONF"
 rollback() {
   echo "FAILED: restoring $BAK and restarting nym-bridge" >&2
   cp -a "$BAK"/. /etc/nym/ || true
