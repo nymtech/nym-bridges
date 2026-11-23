@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `scripts/upgrade-nym-bridge.sh` takes `--tls-port`/`--ssh-port` instead of hardcoding 4443/4422, and now defaults to 443/2222 so the TLS and SSH transports blend in on networks that only allow standard ports out. Operators upgrading an already-added TLS/SSH transport keep their existing port - only a fresh add picks up the new default, so remember to also open 443/2222 in your cloud provider's firewall
+
 ## [0.4.0-rc.1] - 2026-11-18
 
 Renamed from 0.3.2 to 0.4.0: this release has a breaking config change (`block`, below),
