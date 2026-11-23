@@ -8,21 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- `scripts/upgrade-nym-bridge.sh` takes `--tls-port`/`--ssh-port` instead of hardcoding 4443/4422, and now defaults to 443/2222 so the TLS and SSH transports blend in on networks that only allow standard ports out. Operators upgrading an already-added TLS/SSH transport keep their existing port - only a fresh add picks up the new default, so remember to also open 443/2222 in your cloud provider's firewall
-
-## [0.4.0-rc.1] - 2026-11-18
+## [0.4.0] - 2026-11-23
 
 Renamed from 0.3.2 to 0.4.0: this release has a breaking config change (`block`, below),
 and this project bumps the minor version for breaking changes on 0.x releases (see 0.3.0).
-Supersedes v0.3.2-rc.1 through rc.3, all tagged under the wrong version and never
-published anywhere - same content otherwise, no changes below.
+Supersedes v0.3.2-rc.1 through rc.3 and v0.4.0-rc.1, all tagged under the wrong version or
+as a pre-release and never published anywhere - same content otherwise, no changes below.
 
 ### Changed
 
 - **Breaking config change:** `block` on the QUIC and TLS transports is now a plain IP address instead of a socket address (e.g. `block = "2a01::1234"`, no port). If you had `block` set with a port, drop it when upgrading - the old form will fail to parse. SSH gains the same `block` option, newly.
 - QUIC now offers `h3` first (falling back to the legacy `hq-29` for clients that haven't upgraded), and TLS now negotiates a real-looking ALPN (`http/1.1` on the server, `h2`/`http/1.1` offered by the client) instead of none at all. The public `ALPN_QUIC_HTTP` constant is removed (it was unused outside this crate)
+- `scripts/upgrade-nym-bridge.sh` takes `--tls-port`/`--ssh-port` instead of hardcoding 4443/4422, and now defaults to 443/2222 so the TLS and SSH transports blend in on networks that only allow standard ports out. Operators upgrading an already-added TLS/SSH transport keep their existing port - only a fresh add picks up the new default, so remember to also open 443/2222 in your cloud provider's firewall
+- `scripts/upgrade-nym-bridge.sh` now only migrates the `block` field's old socket-address form on releases that actually expect a plain IP (0.4.0+), handles both TOML quote styles, and refreshes the published disguise-host SNI pool on every run
 
 ### Added
 
