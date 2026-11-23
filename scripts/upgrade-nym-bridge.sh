@@ -35,6 +35,12 @@ for arg in "$@"; do
     *) echo "unknown argument: $arg" >&2; exit 1 ;;
   esac
 done
+for p in "$TLS_PORT" "$SSH_PORT"; do
+  if [[ ! "$p" =~ ^[0-9]+$ ]] || (( 10#$p < 1 || 10#$p > 65535 )); then
+    echo "invalid port: $p" >&2; exit 1
+  fi
+done
+[[ "$TLS_PORT" != "$SSH_PORT" ]] || { echo "--tls-port and --ssh-port must differ (both $TLS_PORT)" >&2; exit 1; }
 
 CONF=/etc/nym/bridges.toml
 NODE_CFG="${NODE_CFG:-$(find "${HOME:-/root}/.nym/nym-nodes" -name config.toml 2>/dev/null | head -n1 || true)}"
