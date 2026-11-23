@@ -44,9 +44,9 @@ The script:
 1. checks your current QUIC key and backs up `/etc/nym` to `/etc/nym.bak-<timestamp>`
 2. installs the `.deb` for the release you name. If an older install left copies of `nym-bridge` or
    `bridge-cfg` in `/usr/local/bin`, they become links to the packaged binaries so your service keeps its path
-3. adds the TLS (TCP 4443) and SSH (TCP 4422) transports to `bridges.toml`, creating keys only for those
-   two and keeping your QUIC key. If another program already listens on one of those TCP ports, it skips that
-   transport and warns you
+3. adds the TLS (TCP 443) and SSH (TCP 2222) transports to `bridges.toml`, creating keys only for those
+   two and keeping your QUIC key. Use `--tls-port`/`--ssh-port` to pick different ports. If another program
+   already listens on one of those TCP ports, it skips that transport and warns you
 4. opens the configured ports in ufw, firewalld or iptables
 5. restarts `nym-bridge`, checks that it listens on every configured port and that the QUIC key is unchanged
 
@@ -60,16 +60,17 @@ Allow **inbound** traffic (IPv4 and IPv6) to your node for:
 | Protocol | Port | Purpose |
 |---|---|---|
 | UDP | 4443 | QUIC (already open on a working bridge) |
-| TCP | 4443 | TLS |
-| TCP | 4422 | SSH |
+| TCP | 443 | TLS |
+| TCP | 2222 | SSH |
 
-If you changed the listen ports in `bridges.toml`, open those instead. The script prints the exact list.
+If you used `--tls-port`/`--ssh-port`, or already had TLS/SSH added from an earlier upgrade, open those
+ports instead - the script prints the exact list it configured at the end of the run.
 
 Check from **another machine** that the TCP ports answer:
 
 ```bash
-nc -vz <your public IP> 4443
-nc -vz <your public IP> 4422
+nc -vz <your public IP> 443
+nc -vz <your public IP> 2222
 ```
 
 A timeout means a firewall between you and the node is still blocking the port. "Connection refused" means
@@ -80,7 +81,7 @@ the port is open but nothing listens on it.
 ```bash
 systemctl status nym-bridge --no-pager
 journalctl -u nym-bridge -n 30 --no-pager      # expect quic, tls and ssh "transport listening" lines
-ss -lntup | grep -E ':4443|:4422'
+ss -lntup | grep -E ':4443|:443|:2222'
 curl -s http://127.0.0.1:8080/api/v1/bridges/client-params | jq '{transports: (.transports|length), transports_v2: (.transports_v2|length)}'
 ```
 
@@ -90,8 +91,9 @@ the same as before the upgrade.
 ## Using the Nym tunnel manager
 
 If your host firewall is managed by `network-tunnel-manager.sh`, it may replace rules added by hand. Its TCP
-allow list needs `4443` and `4422` as well. Check the version you run, and after any run of the tunnel manager
-check the ports still answer from another machine (see above).
+allow list needs `443` and `2222` as well (or whatever ports the script configured - see above). Check the
+version you run, and after any run of the tunnel manager check the ports still answer from another machine
+(see above).
 
 ## If something goes wrong
 
