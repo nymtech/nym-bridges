@@ -5,9 +5,13 @@
 # - never regenerates the QUIC identity key; it stops if the published QUIC key changes
 # - opens the configured listen ports in ufw, firewalld or iptables, whichever the host uses
 #
-# usage: sudo ./upgrade-nym-bridge.sh [TAG] [--no-tls-ssh]
+# usage: sudo ./upgrade-nym-bridge.sh [TAG] [--no-tls-ssh] [--tls-port=PORT] [--ssh-port=PORT]
 #   TAG            release tag to install (default: v0.3.0). Pre-releases work, e.g. v0.3.0-rc.1
 #   --no-tls-ssh   upgrade the binaries only and leave the transports in bridges.toml as they are
+#   --tls-port     TCP port for the TLS transport (default: 443, blends in with ordinary web
+#                  traffic on networks that only allow standard ports out)
+#   --ssh-port     TCP port for the SSH transport (default: 2222; not 22, which real sshd is
+#                  already using - the script skips adding a transport whose port is bound)
 #
 # Your cloud provider's firewall (security group) is separate from the host firewall and is not
 # changed by this script: allow the TCP ports it prints at the end there as well.
@@ -20,9 +24,13 @@ list_ports() {
 
 TAG="v0.3.0"
 ADD_TLS_SSH=1
+TLS_PORT=443
+SSH_PORT=2222
 for arg in "$@"; do
   case "$arg" in
     --no-tls-ssh) ADD_TLS_SSH=0 ;;
+    --tls-port=*) TLS_PORT="${arg#*=}" ;;
+    --ssh-port=*) SSH_PORT="${arg#*=}" ;;
     v*) TAG="$arg" ;;
     *) echo "unknown argument: $arg" >&2; exit 1 ;;
   esac
@@ -81,7 +89,7 @@ for b in nym-bridge bridge-cfg; do
 done
 
 if [[ "$ADD_TLS_SSH" -eq 1 ]]; then
-  for t in tls_plain:4443 ssh_plain:4422; do
+  for t in "tls_plain:$TLS_PORT" "ssh_plain:$SSH_PORT"; do
     name="${t%%:*}"; port="${t##*:}"
     if ! grep -Eq "^[[:space:]]*transport_type[[:space:]]*=[[:space:]]*\"$name\"" "$CONF"; then
       listening="$(ss -ltn "sport = :$port")"
