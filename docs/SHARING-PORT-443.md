@@ -92,13 +92,29 @@ cp /etc/nginx/sites-enabled/<your-vhost-file> /root/<your-vhost-file>.bak
    Expect `200` (or whatever your landing page normally returns). If this fails, restore the two
    backup files and `systemctl restart nginx` before doing anything else.
 
-5. **Confirm loopback 443 is genuinely free**, then run `add-stealth-ports.sh` (or add the
-   `tls_plain` transport by hand) with its `listen` set to `127.0.0.1:443` - loopback, same port
-   number as the public one. The port number must match what you want published to clients; only
-   the bind address differs.
+5. **Confirm loopback 443 is genuinely free**, then add the `tls_plain` transport to
+   `/etc/nym/bridges.toml` by hand - `add-stealth-ports.sh` always binds `[::]:PORT` and has no
+   option to target loopback only, so it cannot do this step for you:
 
    ```bash
    timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/443' && echo "still taken" || echo "free"
+
+   openssl genpkey -algorithm ed25519 -out /etc/nym/keys/tls_443_ed25519_identity.pem
+   chmod 640 /etc/nym/keys/tls_443_ed25519_identity.pem
+   chown root:nym /etc/nym/keys/tls_443_ed25519_identity.pem
+
+   cat >> /etc/nym/bridges.toml <<EOF
+
+   [[transports]]
+   transport_type = "tls_plain"
+
+   [transports.args]
+   listen = "127.0.0.1:443"
+   private_ed25519_identity_key_file = "/etc/nym/keys/tls_443_ed25519_identity.pem"
+   EOF
+
+   bridge-cfg --gen -i /etc/nym/bridges.toml -n <path to your node's config.toml> -d /etc/nym -o /etc/nym/bridges.toml
+   systemctl restart nym-bridge
    ```
 
 ## Why the port number has to match

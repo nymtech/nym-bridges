@@ -19,7 +19,6 @@
 set -Eeuo pipefail
 
 CONF=/etc/nym/bridges.toml
-NODE_CFG="${NODE_CFG:-$(find "${HOME:-/root}/.nym/nym-nodes" -name config.toml 2>/dev/null | head -n1 || true)}"
 KEYS_DIR=/etc/nym/keys
 BAK="/etc/nym.bak-stealth-$(date +%F-%H%M%S)"
 
@@ -32,8 +31,10 @@ for arg in "$@"; do
     *) echo "unknown argument: $arg" >&2; exit 1 ;;
   esac
 done
-for p in "$TLS_PORT" "$SSH_PORT"; do
-  [[ "$p" =~ ^[0-9]+$ ]] && (( 10#$p >= 1 && 10#$p <= 65535 )) || { echo "invalid port: $p" >&2; exit 1; }
+for p in TLS_PORT SSH_PORT; do
+  v="${!p}"
+  [[ "$v" =~ ^[0-9]+$ ]] && (( 10#$v >= 1 && 10#$v <= 65535 )) || { echo "invalid port: $v" >&2; exit 1; }
+  printf -v "$p" '%d' "$((10#$v))"
 done
 [[ "$TLS_PORT" != "$SSH_PORT" ]] || { echo "--tls-port and --ssh-port must differ (both $TLS_PORT)" >&2; exit 1; }
 
@@ -42,7 +43,9 @@ for c in openssl jq dpkg systemctl ss awk bridge-cfg; do
   command -v "$c" >/dev/null || { echo "missing: $c (this script supports Debian and Ubuntu)" >&2; exit 1; }
 done
 [[ -f "$CONF" ]] || { echo "expected $CONF; run the full bridge setup first" >&2; exit 1; }
-[[ -f "$NODE_CFG" ]] || { echo "set NODE_CFG to your nym-node config.toml" >&2; exit 1; }
+
+NODE_CFG="${NODE_CFG:-$(awk -F'"' '/^node_config_path/ {print $2}' "$CONF")}"
+[[ -n "$NODE_CFG" && -f "$NODE_CFG" ]] || { echo "set NODE_CFG, or add node_config_path to $CONF" >&2; exit 1; }
 
 # prints "<transport_type> <port>" for every transport already in CONF
 list_ports() {
@@ -102,6 +105,7 @@ rollback() {
   systemctl restart nym-bridge || true
 }
 trap rollback ERR
+trap 'rollback; exit 1' INT TERM HUP
 
 # Appends a second `[[transports]]` entry for an already-present transport type, at a new port,
 # with its own freshly generated key - never touches the existing entry or its key.
@@ -141,33 +145,37 @@ done
 [[ -z "$missing" ]] || { echo "$missing" >&2; false; }
 [[ "$(quic_key)" == "$BEFORE_QUIC" ]] || { echo "QUIC key changed after restart" >&2; false; }
 
-FIREWALLD_RELOAD=0
-open_port() {
-  local proto="$1" port="$2"
-  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-    ufw allow "$port/$proto" >/dev/null
-    echo "ufw: allowed $port/$proto"
-  elif command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
-    firewall-cmd --permanent --add-port="$port/$proto" >/dev/null
-    FIREWALLD_RELOAD=1
-    echo "firewalld: allowed $port/$proto"
-  else
-    local ipt
-    for ipt in iptables ip6tables; do
-      command -v "$ipt" >/dev/null || continue
-      "$ipt" -C INPUT -p "$proto" --dport "$port" -m comment --comment NYM-BRIDGE -j ACCEPT 2>/dev/null ||
-        "$ipt" -I INPUT 1 -p "$proto" --dport "$port" -m comment --comment NYM-BRIDGE -j ACCEPT
-    done
-    echo "iptables: allowed $port/$proto"
-  fi
-}
-for entry in "${TO_ADD[@]}"; do
-  open_port tcp "${entry#* }"
-done
-[[ "$FIREWALLD_RELOAD" -eq 1 ]] && firewall-cmd --reload >/dev/null
-command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null || true
+if systemctl show nym-bridge -p ExecStartPre --value 2>/dev/null | grep -q firewall-sync; then
+  echo "firewall-sync is wired into nym-bridge.service; it already opened the new ports on restart"
+else
+  FIREWALLD_RELOAD=0
+  open_port() {
+    local proto="$1" port="$2"
+    if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+      ufw allow "$port/$proto" >/dev/null
+      echo "ufw: allowed $port/$proto"
+    elif command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
+      firewall-cmd --permanent --add-port="$port/$proto" >/dev/null
+      FIREWALLD_RELOAD=1
+      echo "firewalld: allowed $port/$proto"
+    else
+      local ipt
+      for ipt in iptables ip6tables; do
+        command -v "$ipt" >/dev/null || continue
+        "$ipt" -C INPUT -p "$proto" --dport "$port" -m comment --comment NYM-BRIDGE -j ACCEPT 2>/dev/null ||
+          "$ipt" -I INPUT 1 -p "$proto" --dport "$port" -m comment --comment NYM-BRIDGE -j ACCEPT
+      done
+      echo "iptables: allowed $port/$proto"
+    fi
+  }
+  for entry in "${TO_ADD[@]}"; do
+    open_port tcp "${entry#* }"
+  done
+  [[ "$FIREWALLD_RELOAD" -eq 1 ]] && firewall-cmd --reload >/dev/null
+  command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null || true
+fi
 
-trap - ERR
+trap - ERR INT TERM HUP
 echo
 echo "OK. Backup kept at $BAK"
 echo "Added: ${TO_ADD[*]}"
