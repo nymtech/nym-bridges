@@ -201,10 +201,10 @@ fn adapt_existing_bridge_config() {
 
     let bridge_config_out: PersistedServerConfig = toml::from_str(&bridge_cfg.serialize()).unwrap();
 
-    // Check that the forward address points to the correct wireguard listener
+    // No `public_ips_source` set above means "static": forward address must stay as-is.
     assert_eq!(
         bridge_config_out.forward.address,
-        "1.1.1.1:51822".parse().unwrap()
+        "[::1]:5000".parse().unwrap()
     );
 
     // check that a no new keys were generated (key exists as bytes)

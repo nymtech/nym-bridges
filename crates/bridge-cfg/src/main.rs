@@ -474,17 +474,19 @@ impl ConfigRun {
             bridge_cfg.generate_keys(self.opts.allow_overwrite, &self.paths.key_dir)?;
         }
 
-        // Set public IPs for bridge config. Existing static configs keep the IPs they have (unless
-        // empty); otherwise use the nym-node config IPs, falling back to detection.
+        // Set public IPs and forward address for bridge config. Existing static configs keep both
+        // as they are (unless public_ips is empty); otherwise derive from the nym-node config,
+        // falling back to detection.
         if bridge_cfg.get_public_ips().is_empty()
             || bridge_cfg.get_public_ips_source() == PublicIpsSource::Auto
         {
             refresh_public_ips(&mut bridge_cfg, &node_cfg);
+        } else {
+            info!(
+                "public_ips_source is \"static\", leaving public IPs and forward address unchanged"
+            );
         }
 
-        // adapt the nym-bridge configuration
-        let forward_address = node_cfg.get_forward_address();
-        bridge_cfg.set_forward_address(forward_address);
         bridge_cfg.set_client_config_path(&self.paths.bridge_client_cfg_path);
         if node_cfg.is_from_file() {
             let node_cfg_path = std::fs::canonicalize(&self.paths.node_cfg_path)
@@ -555,13 +557,13 @@ fn main() -> Result<()> {
     } else {
         args.adapt_config_files()
     };
-    if let Err(e) = result {
+    if let Err(e) = &result {
         // `{e:#}` (rather than `{e}`) prints the full anyhow causal chain -- otherwise only the
         // outermost context message is shown and the actual underlying error is silently dropped.
         error!("config adaptation failed: {e:#}");
     }
 
-    Ok(())
+    result
 }
 
 #[cfg(test)]
